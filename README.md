@@ -130,3 +130,7 @@ tailnet itself, so do not expose this server publicly.
 - Row counts come from CSV records, not lines: a quoted field may contain newlines, and a
   line count overreports
 - `data/sample.csv` is a small demo file with obvious PII columns
+
+## License
+
+MIT — see [LICENSE](LICENSE).
