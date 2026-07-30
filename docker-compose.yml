@@ -9,6 +9,7 @@ services:
     environment:
       LOCAL_LLM_URL: ${LOCAL_LLM_URL:-}
       LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-local}
+      LLAMA_SWAP_URL: ${LLAMA_SWAP_URL:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
       REDACTION_MASK: ${REDACTION_MASK:-***}
     extra_hosts:

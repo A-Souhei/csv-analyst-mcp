@@ -128,6 +128,11 @@
                 data-bs-toggle="modal" data-bs-target="#colModal">Choose…</button>
       </div>
       <span class="small text-secondary" id="colInfo"></span>
+      <div class="btn-group btn-group-sm" id="exportGroup"
+           title="Download everything this view holds — all rows, not just this page — with the columns shown and PII still masked">
+        <button class="btn btn-outline-secondary" id="exportCsv" type="button">Export CSV</button>
+        <button class="btn btn-outline-secondary" id="exportXlsx" type="button">Excel</button>
+      </div>
       <div class="ms-auto d-flex align-items-center gap-1">
         <button class="btn btn-sm btn-outline-secondary" id="dataFirst" type="button" title="First page">&laquo;</button>
         <button class="btn btn-sm btn-outline-secondary" id="dataPrev" type="button" title="Previous page (←)">&larr;</button>
@@ -919,6 +924,62 @@ $('joinReset').addEventListener('click', () => {
   dataPage = 1;
   loadPreview();
 });
+
+// --- export the current view ---
+// the columns the table is showing, in its order — so an export matches the screen
+const shownColumnNames = () => {
+  const d = dataCache;
+  if (!d) return [];
+  const q = colQuery.trim().toLowerCase();
+  return d.columns
+    .filter(c => (colMode === 'all'
+        || (colMode === 'nopii' && !c.pii)
+        || (colMode === 'chosen' && chosenCols.has(c.name)))
+      && (!q || c.name.toLowerCase().includes(q)))
+    .map(c => c.name);
+};
+
+async function exportView(format) {
+  const buttons = [$('exportCsv'), $('exportXlsx')];
+  const labels = buttons.map(b => b.textContent);
+  buttons.forEach((b, i) => { b.disabled = true; b.textContent = i === 0 ? 'Exporting…' : b.textContent; });
+  try {
+    const res = await fetch('/api/export', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        file: dataFile, code: queryCode, joins: joinSpec,
+        sort: dataSort.col, dir: dataSort.dir,
+        columns: shownColumnNames(), format,
+      }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || res.status);
+
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const name = (disposition.match(/filename="([^"]+)"/) || [])[1]
+      || `${baseOf(dataFile)}.${format}`;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = Object.assign(document.createElement('a'), {href: url, download: name});
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+
+    const rows = res.headers.get('X-Export-Rows');
+    const masked = res.headers.get('X-Export-Redacted');
+    flash(`Exported ${Number(rows).toLocaleString()} row(s) to ${name}`
+      + (masked ? ` — masked: ${esc(masked)}` : '')
+      + (res.headers.get('X-Export-Truncated') === '1' ? ' (truncated)' : ''));
+  } catch (e) {
+    flash('Export failed: ' + e.message, 'danger');
+  } finally {
+    buttons.forEach((b, i) => { b.disabled = false; b.textContent = labels[i]; });
+  }
+}
+
+$('exportCsv').addEventListener('click', () => exportView('csv'));
+$('exportXlsx').addEventListener('click', () => exportView('xlsx'));
 
 const goPage = n => { dataPage = n; loadPreview(); };
 $('dataFirst').addEventListener('click', () => goPage(1));

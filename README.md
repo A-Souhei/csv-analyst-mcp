@@ -19,6 +19,9 @@ the guardrail is enforced server-side rather than by prompting.
 | `classify_pii_local` | Classify PII with the local LLM and save the result |
 | `run_eda` | Run pandas code with the PII guardrail; returns stdout + last expression |
 | `visualize` | Same, rendered as a styled HTML table page; returns URL + markdown preview |
+| `export_table` | Write a view to CSV or Excel (still masked) and return its URL |
+| `llm_status` | GPU memory and which local models llama-swap has loaded |
+| `llm_stop` | Unload every loaded model, freeing VRAM immediately |
 
 `run_eda` and `visualize` also take `joins` — up to four other files merged in first, so
 analysis can span files (see [Joins](#joins)).
@@ -83,6 +86,20 @@ against), the chosen columns and the joins. Reports written by `visualize` are s
 `/reports/<name>.html`: paginated client-side, magnitude bars on numeric columns,
 light/dark, redaction noted in the footer.
 
+## Exports and GPU
+
+The viewer's **Export CSV / Excel** buttons and the `export_table` tool write the *whole*
+current view — joins, question, sort and chosen columns — not just the visible page.
+The frame is the same masked one the guardrail produces, so a masked column exports as
+`***`. Files land in `data/exports/` and are served at `/exports/<name>`.
+
+`llm_status` and `llm_stop` exist because VRAM is finite: llama-swap unloads a model on
+its own idle TTL, and `llm_stop` is the "give it back now" button. It unloads the whole
+llama-swap instance, so it stops models other clients loaded too — the result names them.
+`start.sh` gives the container GPU visibility (`runtime: nvidia`, driver capability
+`utility`, i.e. nvidia-smi only — no CUDA) when the host has the nvidia runtime; without
+it `llm_status` still reports what is loaded, just with `gpus: null`.
+
 ## Setup
 
 ```sh
@@ -104,6 +121,7 @@ is one click under Sources).
 | `REDACTION_MASK` | What PII values become (default `***`) |
 | `PUBLIC_BASE_URL` | Base URL for report links; empty gives relative paths |
 | `LOCAL_LLM_URL` / `LOCAL_LLM_MODEL` | OpenAI-compatible endpoint for PII classification, the Ask box and join planning |
+| `LLAMA_SWAP_URL` | llama-swap control API for `llm_status` / `llm_stop`; derived from `LOCAL_LLM_URL` when unset |
 | `TS_AUTHKEY` | Tailscale auth key for the optional `ts-csv-analyst` sidecar |
 
 Config lives in `data/config.json` (registered sources + per-file PII lists); reports in
@@ -126,7 +144,7 @@ tailnet itself, so do not expose this server publicly.
 
 - Streamable HTTP, stateless, JSON responses — no session handshake, friendly to
   lightweight clients
-- Endpoints: `/mcp`, `/` (UI), `/reports/<name>`, `/api/{files,preview,query,join,browse,columns,pii,sources}`
+- Endpoints: `/mcp`, `/` (UI), `/reports/<name>`, `/exports/<name>`, `/api/{files,preview,query,join,export,browse,columns,pii,sources}`
 - Row counts come from CSV records, not lines: a quoted field may contain newlines, and a
   line count overreports
 - `data/sample.csv` is a small demo file with obvious PII columns
