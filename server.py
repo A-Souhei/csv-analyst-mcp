@@ -132,6 +132,8 @@ def _known_files() -> list[str]:
             seen.add(str(root))
         elif root.is_dir():
             for f in root.rglob("*.csv"):
+                if EXPORTS_DIR in f.parents:  # our own output, not source data
+                    continue
                 seen.add(str(f))
                 if len(seen) >= MAX_LISTED_FILES:
                     return sorted(seen)
