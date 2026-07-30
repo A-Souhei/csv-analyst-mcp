@@ -1,0 +1,6 @@
+customer_id,full_name,email,phone,city,birth_date,plan,monthly_spend,active
+1001,Alice Martin,alice.martin@example.com,+33612345678,Paris,1990-04-12,pro,49.99,true
+1002,Bob Rakoto,bob.rakoto@example.com,+261341234567,Antananarivo,1985-11-03,free,0,true
+1003,Carla Diaz,carla.diaz@example.com,+34600111222,Madrid,1992-07-25,pro,49.99,false
+1004,David Chen,david.chen@example.com,+8613800138000,Shanghai,1988-01-30,enterprise,199.00,true
+1005,Emma Wilson,emma.wilson@example.com,+447700900123,London,1995-09-17,free,0,true

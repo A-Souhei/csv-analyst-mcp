@@ -1,0 +1,6 @@
+customer_id,signup_source,referred_by
+1001,ads,
+1002,organic,1001
+1003,ads,
+1004,partner,1002
+1005,organic,

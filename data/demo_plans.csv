@@ -1,0 +1,4 @@
+plan,tier,monthly_fee,support_level
+free,0,0,community
+pro,1,49.99,standard
+enterprise,2,199.00,dedicated

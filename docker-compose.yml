@@ -1,0 +1,42 @@
+# dataset volumes are defined in .env (CSV_SOURCES) — run ./start.sh, which
+# generates docker-compose.override.yml from it and brings the stack up
+services:
+  csv-analyst:
+    build: .
+    container_name: csv-analyst-mcp
+    volumes:
+      - ./data:/data
+    environment:
+      LOCAL_LLM_URL: ${LOCAL_LLM_URL:-}
+      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-local}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-}
+      REDACTION_MASK: ${REDACTION_MASK:-***}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  ts-csv-analyst:
+    image: tailscale/tailscale:latest
+    hostname: csv-analyst
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: "${TS_AUTHKEY}"
+      TS_EXTRA_ARGS: ""
+      TS_SERVE_CONFIG: /config/csv-analyst.json
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
+    volumes:
+      - ts_csv_analyst_state:/var/lib/tailscale
+      - ./tailscale/config:/config
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+      - net_raw
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - csv-analyst
+
+volumes:
+  ts_csv_analyst_state:

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>__TITLE__ — csv-analyst</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%230d6efd' d='M8 0 2 2v6c0 4 3 6.5 6 8 3-1.5 6-4 6-8V2L8 0z'/%3E%3Cpath fill='%23fff' d='M4.6 5.4h6.8v1.3H4.6zM4.6 7.9h6.8v1.3H4.6zM4.6 10.4h4.3v1.3H4.6z'/%3E%3C/svg%3E">
+<style>
+:root{
+  color-scheme: light;
+  --plane:#f9f9f7; --surface:#fcfcfb;
+  --ink:#0b0b0b; --ink-2:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --ring:rgba(11,11,11,.10);
+  --bar:#2a78d6; --chip:rgba(11,11,11,.05);
+}
+@media (prefers-color-scheme: dark){
+  :root:where(:not([data-theme="light"])){
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19;
+    --ink:#fff; --ink-2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+    --bar:#3987e5; --chip:rgba(255,255,255,.07);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --plane:#0d0d0d; --surface:#1a1a19;
+  --ink:#fff; --ink-2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+  --bar:#3987e5; --chip:rgba(255,255,255,.07);
+}
+*{box-sizing:border-box}
+[hidden]{display:none !important}
+body{
+  margin:0; padding:2rem 1.25rem 3rem;
+  background:var(--plane); color:var(--ink);
+  font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+.card{
+  max-width:1400px; margin-inline:auto; background:var(--surface);
+  border:1px solid var(--ring); border-radius:12px; overflow:hidden;
+}
+header{padding:1.25rem 1.5rem 1rem}
+h1{margin:0 0 .35rem; font-size:1.05rem; font-weight:600; letter-spacing:-.01em}
+.meta{margin:0; color:var(--ink-2); font-size:.8rem}
+.meta code{color:inherit; font-size:.78rem}
+.scroll{overflow-x:auto; overscroll-behavior-x:contain; border-top:1px solid var(--grid)}
+/* min-width lets wide tables overflow (and the wrapper scroll) instead of
+   squeezing every column to fit */
+table{border-collapse:separate; border-spacing:0; width:100%; min-width:max-content}
+thead th{
+  position:sticky; top:0; z-index:1; background:var(--surface);
+  text-align:left; vertical-align:bottom; white-space:nowrap;
+  padding:.6rem .9rem; border-bottom:1px solid var(--axis);
+  color:var(--muted); font-size:.74rem; font-weight:600; letter-spacing:.01em;
+}
+thead th.num{text-align:right}
+tbody td{
+  padding:.5rem .9rem; border-bottom:1px solid var(--grid);
+  max-width:22rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:var(--chip)}
+td.num{text-align:right; font-variant-numeric:tabular-nums}
+td.idx{color:var(--ink-2); font-weight:500}
+.cell{display:flex; flex-direction:column; align-items:flex-end; gap:3px}
+/* magnitude bar: flush at the right baseline, rounded on the data end */
+.bar{height:4px; border-radius:4px 0 0 4px; background:var(--bar); min-width:2px}
+.nan{color:var(--muted)}
+.tag{
+  display:inline-block; margin-left:.4rem; padding:0 .3rem; border-radius:4px;
+  background:var(--chip); color:var(--muted); font-size:.62rem; letter-spacing:.03em;
+}
+footer{padding:.85rem 1.5rem; color:var(--muted); font-size:.74rem; border-top:1px solid var(--grid)}
+footer p{margin:.15rem 0}
+.pager{
+  display:flex; align-items:center; gap:.75rem; flex-wrap:wrap;
+  padding:.6rem 1.5rem; border-top:1px solid var(--grid);
+  color:var(--ink-2); font-size:.76rem;
+}
+.pager .range{font-variant-numeric:tabular-nums}
+.pager .spacer{flex:1}
+.pager button{
+  font:inherit; color:var(--ink-2); background:transparent; cursor:pointer;
+  border:1px solid var(--ring); border-radius:6px; padding:.2rem .55rem;
+}
+.pager button:hover:not(:disabled){background:var(--chip); color:var(--ink)}
+.pager button:disabled{opacity:.4; cursor:default}
+.pager select{
+  font:inherit; color:var(--ink-2); background:transparent;
+  border:1px solid var(--ring); border-radius:6px; padding:.2rem .3rem;
+}
+</style>
+</head>
+<body data-page="__PAGE__" data-page-size="__PAGE_SIZE__">
+<div class="card">
+  <header>
+    <h1>__TITLE__</h1>
+    <p class="meta">__SUBTITLE__</p>
+  </header>
+  <div class="scroll">__TABLE__</div>
+  <div class="pager" id="pager" hidden>
+    <button id="prev" type="button">&larr; Prev</button>
+    <button id="next" type="button">Next &rarr;</button>
+    <span class="range" id="range"></span>
+    <span class="spacer"></span>
+    <label>rows per page
+      <select id="size">
+        <option>10</option><option>25</option><option>50</option>
+        <option>100</option><option>250</option>
+      </select>
+    </label>
+  </div>
+  <footer>__FOOTER__</footer>
+</div>
+<script>
+(() => {
+  const rows = [...document.querySelectorAll('tbody tr')];
+  const pager = document.getElementById('pager');
+  const [prev, next, range, size] = ['prev', 'next', 'range', 'size'].map(id => document.getElementById(id));
+  let perPage = Number(document.body.dataset.pageSize) || 25;
+  let page = Number(document.body.dataset.page) || 1;
+
+  if (!rows.length) return;
+  if (![...size.options].some(o => Number(o.value) === perPage)) {
+    size.add(new Option(String(perPage), String(perPage)), 0);
+  }
+  size.value = String(perPage);
+
+  const draw = () => {
+    const pages = Math.max(1, Math.ceil(rows.length / perPage));
+    page = Math.min(Math.max(1, page), pages);
+    const start = (page - 1) * perPage;
+    rows.forEach((tr, i) => { tr.hidden = i < start || i >= start + perPage; });
+    range.textContent =
+      `${start + 1}–${Math.min(start + perPage, rows.length)} of ${rows.length}` +
+      (pages > 1 ? `  ·  page ${page} / ${pages}` : '');
+    prev.disabled = page === 1;
+    next.disabled = page === pages;
+    pager.hidden = rows.length <= 10 && pages === 1;
+  };
+
+  prev.onclick = () => { page--; draw(); };
+  next.onclick = () => { page++; draw(); };
+  size.onchange = () => { perPage = Number(size.value); page = 1; draw(); };
+  draw();
+})();
+</script>
+</body>
+</html>

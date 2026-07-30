@@ -1,0 +1,1114 @@
+<!doctype html>
+<html lang="en" data-bs-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>csv-analyst</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='%230d6efd' d='M8 0 2 2v6c0 4 3 6.5 6 8 3-1.5 6-4 6-8V2L8 0z'/%3E%3Cpath fill='%23fff' d='M4.6 5.4h6.8v1.3H4.6zM4.6 7.9h6.8v1.3H4.6zM4.6 10.4h4.3v1.3H4.6z'/%3E%3C/svg%3E">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+  .pii-badge{font-size:.7rem}
+  .file-row{cursor:pointer}
+  code{color:var(--bs-info)}
+  /* data viewer: scroll inside the container so the header and row numbers stay put */
+  #dataScroll{
+    overflow:auto; max-height:calc(100vh - 17rem);
+    border:1px solid var(--bs-border-color); border-radius:.5rem;
+    transition:opacity .12s ease;
+  }
+  #dataTable{margin:0; width:auto; min-width:100%; font-size:.85rem}
+  #dataTable th, #dataTable td{
+    white-space:nowrap; max-width:24rem; overflow:hidden; text-overflow:ellipsis;
+  }
+  #dataTable thead th{
+    position:sticky; top:0; z-index:3; background:var(--bs-body-bg);
+    vertical-align:top; box-shadow:inset 0 -1px 0 var(--bs-border-color);
+  }
+  #dataTable .rownum{
+    position:sticky; left:0; z-index:2; background:var(--bs-body-bg);
+    color:var(--bs-secondary-color); text-align:right;
+    font-variant-numeric:tabular-nums; box-shadow:inset -1px 0 0 var(--bs-border-color);
+  }
+  #dataTable thead .rownum{z-index:4}
+  #dataTable td.num{text-align:right; font-variant-numeric:tabular-nums}
+  .col-dtype{font-size:.68rem; font-weight:400; color:var(--bs-secondary-color)}
+  #dataTable th.sort-col{cursor:pointer; user-select:none}
+  #dataTable th.sort-col:hover{background:var(--bs-tertiary-bg)}
+  #dataTable th.sorted{background:var(--bs-tertiary-bg)}
+  #dataTable th.sorted .col-dtype{color:var(--bs-primary)}
+  .sort-mark{opacity:.35; font-size:.8em; margin-left:.15rem}
+  #dataTable th.sorted .sort-mark{opacity:1; color:var(--bs-primary)}
+  #dataTable th.sort-col:hover .sort-mark{opacity:.8}
+  .cell-null{color:var(--bs-secondary-color)}
+  .cell-mask{color:var(--bs-danger); letter-spacing:.12em}
+</style>
+</head>
+<body>
+<nav class="navbar navbar-expand bg-body-tertiary border-bottom mb-4">
+  <div class="container">
+    <span class="navbar-brand">🛡️ csv-analyst</span>
+    <ul class="navbar-nav me-auto">
+      <li class="nav-item"><a class="nav-link" href="#/files" data-nav="files">Files</a></li>
+      <li class="nav-item"><a class="nav-link" href="#/sources" data-nav="sources">Sources</a></li>
+    </ul>
+    <span class="navbar-text small" id="dataDir"></span>
+  </div>
+</nav>
+
+<div class="container pb-5">
+  <div id="alert"></div>
+
+  <!-- Files view -->
+  <div id="view-files" hidden>
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+      <h5 class="mb-0">CSV files <span class="text-secondary fw-normal" id="fileCount"></span></h5>
+      <div class="ms-auto d-flex align-items-center gap-2 flex-wrap">
+        <input class="form-control form-control-sm" id="fileSearch" type="search"
+               placeholder="Search file name…" style="width:13rem" autocomplete="off">
+        <select class="form-select form-select-sm" id="folderFilter" style="max-width:30rem"
+                aria-label="Filter by folder"></select>
+        <select class="form-select form-select-sm" id="filesPageSize" style="width:5rem"
+                aria-label="Rows per page">
+          <option>10</option><option selected>25</option><option>50</option><option>100</option>
+        </select>
+      </div>
+    </div>
+    <table class="table table-hover align-middle">
+      <thead><tr>
+        <th class="sortable" data-sort="name" style="cursor:pointer">File <span class="sort-caret"></span></th>
+        <th class="text-end sortable" data-sort="cols" style="cursor:pointer">Columns <span class="sort-caret"></span></th>
+        <th class="text-end sortable" data-sort="pii" style="cursor:pointer">PII <span class="sort-caret"></span></th>
+        <th>PII source</th><th>Detected types</th><th class="text-end"></th>
+      </tr></thead>
+      <tbody id="filesBody"></tbody>
+    </table>
+    <div class="d-flex align-items-center gap-2" id="filesPager" hidden>
+      <button class="btn btn-sm btn-outline-secondary" id="filesPrev" type="button">&larr; Prev</button>
+      <button class="btn btn-sm btn-outline-secondary" id="filesNext" type="button">Next &rarr;</button>
+      <span class="small text-secondary" id="filesRange"></span>
+    </div>
+  </div>
+
+  <!-- Data viewer -->
+  <div id="view-data" hidden>
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+      <a href="#/files" class="btn btn-sm btn-outline-secondary">&larr; Files</a>
+      <div class="me-auto">
+        <div class="fw-semibold" id="dataName"></div>
+        <div class="small text-secondary font-monospace text-truncate" style="max-width:44rem" id="dataFolder"></div>
+      </div>
+      <span class="small text-secondary" id="dataMeta"></span>
+      <button class="btn btn-sm btn-outline-secondary" id="joinOpen" type="button"
+              data-bs-toggle="modal" data-bs-target="#joinModal">Join…</button>
+      <a class="btn btn-sm btn-outline-primary" id="dataConfigure">Configure PII</a>
+    </div>
+
+    <form class="mb-2" id="askForm" autocomplete="off">
+      <div class="position-relative">
+        <div class="input-group input-group-sm">
+          <span class="input-group-text">Ask</span>
+          <input class="form-control" id="askInput" type="text"
+                 placeholder="e.g. rows on the pro plan with monthly_spend over 40 — PII columns can't be filtered on">
+          <button class="btn btn-primary" id="askRun" type="submit">Filter</button>
+          <button class="btn btn-outline-secondary" id="askClear" type="button" hidden>Clear</button>
+        </div>
+        <div class="list-group position-absolute w-100 shadow-sm" id="askHistoryBox" hidden
+             style="z-index:1050; max-height:15rem; overflow:auto"></div>
+      </div>
+      <div class="small mt-1" id="askState" hidden></div>
+    </form>
+
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+      <input class="form-control form-control-sm" id="colSearch" type="search"
+             placeholder="Filter columns…" style="width:12rem" autocomplete="off">
+      <div class="btn-group btn-group-sm">
+        <button class="btn btn-outline-secondary active" id="colAll" type="button">All columns</button>
+        <button class="btn btn-outline-secondary" id="colHidePii" type="button">Hide PII</button>
+        <button class="btn btn-outline-secondary" id="colChoose" type="button"
+                data-bs-toggle="modal" data-bs-target="#colModal">Choose…</button>
+      </div>
+      <span class="small text-secondary" id="colInfo"></span>
+      <div class="ms-auto d-flex align-items-center gap-1">
+        <button class="btn btn-sm btn-outline-secondary" id="dataFirst" type="button" title="First page">&laquo;</button>
+        <button class="btn btn-sm btn-outline-secondary" id="dataPrev" type="button" title="Previous page (←)">&larr;</button>
+        <span class="small text-secondary text-nowrap mx-1" id="dataRange"></span>
+        <button class="btn btn-sm btn-outline-secondary" id="dataNext" type="button" title="Next page (→)">&rarr;</button>
+        <button class="btn btn-sm btn-outline-secondary" id="dataLast" type="button" title="Last page">&raquo;</button>
+        <select class="form-select form-select-sm ms-1" id="dataPageSize" style="width:5rem" aria-label="Rows per page">
+          <option>25</option><option selected>50</option><option>100</option><option>250</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="dataScroll"><table class="table table-sm table-hover align-middle" id="dataTable"></table></div>
+    <div class="small text-secondary mt-2" id="dataFooter"></div>
+  </div>
+
+  <!-- Join builder -->
+  <div class="modal fade" id="joinModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Join with other files</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="small text-secondary">
+            Base table: <code id="joinBase"></code> — up to <span id="joinMax">4</span> joins.
+            Each file keeps its own PII masking.
+          </p>
+          <div id="joinRows"></div>
+          <button class="btn btn-sm btn-outline-secondary" id="joinAdd" type="button">+ Add join</button>
+        </div>
+        <div class="modal-footer">
+          <span class="small text-secondary me-auto">
+A 🛡 column can be a join key: it matches on the real values and
+            stays masked in the result.
+          </span>
+          <button type="button" class="btn btn-outline-danger" id="joinReset" data-bs-dismiss="modal">Remove joins</button>
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary" id="joinApply" data-bs-dismiss="modal">Apply join</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Column picker -->
+  <div class="modal fade" id="colModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Choose columns</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+            <input class="form-control form-control-sm" id="colModalSearch" type="search"
+                   placeholder="Search columns…" style="width:14rem" autocomplete="off">
+            <div class="btn-group btn-group-sm">
+              <button class="btn btn-outline-secondary" id="colPickAll" type="button">Select all</button>
+              <button class="btn btn-outline-secondary" id="colPickNone" type="button">Select none</button>
+              <button class="btn btn-outline-secondary" id="colPickNonPii" type="button">Non-PII only</button>
+            </div>
+            <span class="small text-secondary ms-auto" id="colPickCount"></span>
+          </div>
+          <div id="colPickList" class="row row-cols-1 row-cols-md-2 g-1"></div>
+        </div>
+        <div class="modal-footer">
+          <span class="small text-secondary me-auto">PII columns stay masked (***) even when shown.</span>
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="button" class="btn btn-primary" id="colApply" data-bs-dismiss="modal">Show selected</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- File detail view -->
+  <div id="view-detail" hidden>
+    <div class="d-flex align-items-center gap-2 mb-1">
+      <a href="#/files" class="btn btn-sm btn-outline-secondary">&larr; Back</a>
+      <a href="#" class="btn btn-sm btn-outline-secondary" id="detailViewData">View data</a>
+      <h5 class="mb-0"><code id="detailPath"></code></h5>
+      <span id="detailSource"></span>
+    </div>
+    <p class="text-secondary small">Checked columns are treated as PII and redacted in EDA output.</p>
+    <div class="mb-3 d-flex gap-2">
+      <button class="btn btn-sm btn-primary" onclick="savePii()">Save PII list</button>
+      <button class="btn btn-sm btn-outline-warning" onclick="resetPii()">Reset to auto-detect</button>
+      <span class="align-self-center small text-secondary" id="checkedCount"></span>
+    </div>
+    <table class="table table-sm align-middle" style="max-width:720px">
+      <thead><tr><th style="width:2.5rem">PII</th><th>Column</th><th>Auto detection</th></tr></thead>
+      <tbody id="colsBody"></tbody>
+    </table>
+  </div>
+
+  <!-- Sources view -->
+  <div id="view-sources" hidden>
+    <div class="row g-4">
+      <div class="col-lg-5">
+        <h5>Mounted datasets <span class="text-secondary fw-normal small">(.env → CSV_SOURCES)</span></h5>
+        <p class="text-secondary small">Read-only mounts you can browse on the right. Files
+          appear in the Files list once you add them — add a whole mount here, or pick
+          single folders and files from the browser.</p>
+        <ul class="list-group mb-4" id="mountedList"></ul>
+        <h5>Registered sources</h5>
+        <p class="text-secondary small">Extra directories or CSV files added from the browser on the right.</p>
+        <ul class="list-group" id="sourcesList"></ul>
+      </div>
+      <div class="col-lg-7">
+        <h5>Browse server filesystem</h5>
+        <div class="card">
+          <div class="card-header d-flex align-items-center gap-2">
+            <button class="btn btn-sm btn-outline-secondary" id="upBtn" onclick="browseUp()">&uarr; Up</button>
+            <code class="small" id="browsePath"></code>
+            <button class="btn btn-sm btn-success ms-auto" id="addDirBtn" onclick="addSource(browseState.path)">+ Add this directory</button>
+          </div>
+          <ul class="list-group list-group-flush" id="browseList" style="max-height:22rem;overflow:auto"></ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let filesCache = [], detailFile = null, browseState = {path: null, parent: null};
+let fileFolder = '', fileQuery = '', filesPage = 1, filesPageSize = 25;
+let filesSort = {key: 'name', desc: false};
+let dataFile = null, dataPage = 1, dataPageSize = 50, dataCache = null;
+let colQuery = '', queryCode = '';
+let colMode = 'all', chosenCols = new Set(), pickDraft = new Set();
+let joinSpec = [], joinDraft = [], baseColumns = {all: [], pii: new Set()};
+let dataSort = {col: '', dir: 'asc'};
+let colPrefsLoaded = false;
+
+const api = async (url, opts) => {
+  const r = await fetch(url, opts);
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || r.status);
+  return d;
+};
+const post = (url, body) => api(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+const flash = (msg, kind = 'success') => {
+  $('alert').innerHTML = `<div class="alert alert-${kind} alert-dismissible py-2">${msg}
+    <button class="btn-close py-2" data-bs-dismiss="alert"></button></div>`;
+};
+// --- local storage (may be unavailable in private windows, so never throw) ---
+const LS_ASK = 'csvAnalyst.ask:';   // one key per file — questions are about its columns
+const LS_COLS = 'csvAnalyst.columns:';
+const LS_JOINS = 'csvAnalyst.joins:';
+const ASK_HISTORY_MAX = 10;
+const lsGet = (key, fallback) => {
+  try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); }
+  catch (e) { return fallback; }
+};
+const lsSet = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {} };
+// history used to be one shared list; drop the leftover so it stops taking space
+try { localStorage.removeItem('csvAnalyst.askHistory'); } catch (e) {}
+
+const srcBadge = s => s === 'manual'
+  ? '<span class="badge text-bg-success pii-badge">manual</span>'
+  : '<span class="badge text-bg-warning pii-badge">auto</span>';
+
+// --- routing ---
+function route() {
+  const h = location.hash || '#/files';
+  ['files', 'detail', 'sources', 'data'].forEach(v => $('view-' + v).hidden = true);
+  document.querySelectorAll('[data-nav]').forEach(a => a.classList.remove('active'));
+  if (h.startsWith('#/view=')) {
+    const target = decodeURIComponent(h.slice(7));
+    if (target !== dataFile) {
+      dataFile = target; dataPage = 1; colQuery = ''; queryCode = '';
+      colMode = 'all'; chosenCols = new Set(); dataSort = {col: '', dir: 'asc'};
+      colPrefsLoaded = false;
+      loadAskHistory();
+      loadJoins();
+      $('askInput').value = ''; $('askState').hidden = true; $('askClear').hidden = true;
+    }
+    $('view-data').hidden = false;
+    document.querySelector('[data-nav=files]').classList.add('active');
+    $('colSearch').value = colQuery;
+    loadPreview();
+  } else if (h.startsWith('#/file=')) {
+    detailFile = decodeURIComponent(h.slice(7));
+    $('view-detail').hidden = false;
+    loadDetail();
+  } else if (h === '#/sources') {
+    $('view-sources').hidden = false;
+    document.querySelector('[data-nav=sources]').classList.add('active');
+    loadSources();
+  } else {
+    $('view-files').hidden = false;
+    document.querySelector('[data-nav=files]').classList.add('active');
+    loadFiles();
+  }
+}
+window.addEventListener('hashchange', route);
+
+// --- files view ---
+const COPY_ICON = `<svg width="14" height="14" fill="currentColor" viewBox="0 0 16 16" aria-hidden="true">
+  <path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1z"/>
+  <path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0z"/></svg>`;
+const MAX_TYPE_BADGES = 3;
+
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const dirOf = p => { const i = p.lastIndexOf('/'); return i > 0 ? p.slice(0, i) : '/'; };
+const baseOf = p => p.slice(p.lastIndexOf('/') + 1);
+
+async function loadFiles() {
+  const d = await api('/api/files');
+  filesCache = d.files;
+  $('dataDir').textContent = 'data dir: ' + d.data_dir;
+  buildFolderFilter();
+  renderFiles();
+}
+
+function buildFolderFilter() {
+  const counts = new Map();
+  filesCache.forEach(f => counts.set(dirOf(f.path), (counts.get(dirOf(f.path)) || 0) + 1));
+  const folders = [...counts.keys()].sort();
+  if (!counts.has(fileFolder)) fileFolder = '';
+  $('folderFilter').innerHTML =
+    `<option value="">All folders (${filesCache.length})</option>` +
+    folders.map(d => `<option value="${esc(d)}">${esc(d)} (${counts.get(d)})</option>`).join('');
+  $('folderFilter').value = fileFolder;
+}
+
+function filteredFiles() {
+  const q = fileQuery.trim().toLowerCase();
+  const rows = filesCache.filter(f =>
+    (!fileFolder || dirOf(f.path) === fileFolder) &&
+    (!q || baseOf(f.path).toLowerCase().includes(q)));
+  const dir = filesSort.desc ? -1 : 1;
+  return rows.sort((a, b) => dir * (
+    filesSort.key === 'pii' ? (a.n_pii ?? -1) - (b.n_pii ?? -1)
+    : filesSort.key === 'cols' ? (a.n_columns ?? -1) - (b.n_columns ?? -1)
+    : baseOf(a.path).localeCompare(baseOf(b.path))));
+}
+
+function renderFiles() {
+  const rows = filteredFiles();
+  const pages = Math.max(1, Math.ceil(rows.length / filesPageSize));
+  filesPage = Math.min(Math.max(1, filesPage), pages);
+  const start = (filesPage - 1) * filesPageSize;
+  const pageRows = rows.slice(start, start + filesPageSize);
+  const filtered = rows.length !== filesCache.length;
+
+  $('fileCount').textContent = filtered
+    ? `(${rows.length} of ${filesCache.length})` : `(${filesCache.length})`;
+
+  $('filesBody').innerHTML = pageRows.map(f => {
+    const cell = `<div class="fw-medium">${esc(baseOf(f.path))}</div>` +
+      (fileFolder ? '' : `<div class="small text-secondary text-truncate" style="max-width:34rem"
+         title="${esc(dirOf(f.path))}">${esc(dirOf(f.path))}</div>`);
+    if (f.error) {
+      return `<tr data-path="${esc(f.path)}"><td>${cell}</td>
+        <td colspan="4" class="text-danger small">${esc(f.error)}</td>
+        <td class="text-end">${copyBtn(f.path)}</td></tr>`;
+    }
+    const types = f.pii_types.slice(0, MAX_TYPE_BADGES)
+      .map(t => `<span class="badge text-bg-secondary pii-badge me-1">${esc(t)}</span>`).join('') +
+      (f.pii_types.length > MAX_TYPE_BADGES
+        ? `<span class="small text-secondary">+${f.pii_types.length - MAX_TYPE_BADGES}</span>` : '');
+    return `<tr class="file-row" data-path="${esc(f.path)}">
+      <td>${cell}</td>
+      <td class="text-end">${f.n_columns}</td>
+      <td class="text-end"><span class="badge text-bg-${f.n_pii ? 'danger' : 'secondary'}">${f.n_pii}</span></td>
+      <td>${srcBadge(f.source)}</td>
+      <td>${types}</td>
+      <td class="text-end text-nowrap">${copyBtn(f.path)}
+        <button class="btn btn-sm btn-outline-primary" data-configure type="button">Configure</button></td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="6" class="text-secondary py-3">
+      ${filesCache.length ? 'No file matches this folder or search. ' +
+        '<button class="btn btn-sm btn-link p-0 align-baseline" id="clearFilters">Clear filters</button>'
+        : 'No CSV files found — register a source.'}</td></tr>`;
+
+  const pager = $('filesPager');
+  pager.hidden = rows.length <= filesPageSize;
+  $('filesRange').textContent = rows.length
+    ? `${start + 1}–${start + pageRows.length} of ${rows.length}  ·  page ${filesPage} / ${pages}` : '';
+  $('filesPrev').disabled = filesPage === 1;
+  $('filesNext').disabled = filesPage === pages;
+
+  document.querySelectorAll('#view-files .sortable').forEach(th => {
+    th.querySelector('.sort-caret').textContent =
+      th.dataset.sort === filesSort.key ? (filesSort.desc ? '↓' : '↑') : '';
+  });
+  const clear = $('clearFilters');
+  if (clear) clear.onclick = () => {
+    fileFolder = ''; fileQuery = ''; filesPage = 1;
+    $('folderFilter').value = ''; $('fileSearch').value = '';
+    renderFiles();
+  };
+}
+
+const copyBtn = path =>
+  `<button class="btn btn-sm btn-outline-secondary me-1" data-copy type="button"
+     title="Copy path">${COPY_ICON}</button>`;
+
+// the async Clipboard API fails on an unfocused document and outside secure
+// contexts, so fall through to the textarea trick rather than giving up
+async function writeClipboard(text) {
+  try {
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
+  } catch (e) { /* fall through */ }
+  try {
+    const ta = Object.assign(document.createElement('textarea'), {value: text});
+    ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.append(ta); ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch (e) { return false; }
+}
+
+async function copyPath(path, btn) {
+  if (!await writeClipboard(path)) {
+    flash('Could not copy the path — select it from the file page instead.', 'danger');
+    return;
+  }
+  const original = btn.innerHTML;
+  btn.innerHTML = '&check;';
+  btn.classList.replace('btn-outline-secondary', 'btn-outline-success');
+  setTimeout(() => {
+    btn.innerHTML = original;
+    btn.classList.replace('btn-outline-success', 'btn-outline-secondary');
+  }, 1200);
+}
+
+$('filesBody').addEventListener('click', ev => {
+  const tr = ev.target.closest('tr[data-path]');
+  if (!tr) return;
+  const copy = ev.target.closest('[data-copy]');
+  if (copy) { ev.stopPropagation(); copyPath(tr.dataset.path, copy); return; }
+  // the row opens the data; PII curation is the explicit button
+  const target = ev.target.closest('[data-configure]') ? '#/file=' : '#/view=';
+  location.hash = target + encodeURIComponent(tr.dataset.path);
+});
+$('fileSearch').addEventListener('input', e => { fileQuery = e.target.value; filesPage = 1; renderFiles(); });
+$('folderFilter').addEventListener('change', e => { fileFolder = e.target.value; filesPage = 1; renderFiles(); });
+$('filesPageSize').addEventListener('change', e => { filesPageSize = Number(e.target.value); filesPage = 1; renderFiles(); });
+$('filesPrev').addEventListener('click', () => { filesPage--; renderFiles(); });
+$('filesNext').addEventListener('click', () => { filesPage++; renderFiles(); });
+document.querySelectorAll('#view-files .sortable').forEach(th => th.addEventListener('click', () => {
+  const key = th.dataset.sort;
+  filesSort = {key, desc: filesSort.key === key ? !filesSort.desc : key !== 'name'};
+  filesPage = 1;
+  renderFiles();
+}));
+
+// --- data viewer ---
+// the direction reads differently per type: 1→9 for numbers, A→Z for text
+const SORT_LABELS = {
+  number: ['1 → 9', '9 → 1'],
+  date: ['oldest first', 'newest first'],
+  bool: ['false → true', 'true → false'],
+  text: ['A → Z', 'Z → A'],
+  row: ['first → last', 'last → first'],
+};
+const ROW_SORT_KEY = '__row__';
+const sortLabel = (kind, dir) => (SORT_LABELS[kind] || SORT_LABELS.text)[dir === 'desc' ? 1 : 0];
+
+async function loadPreview() {
+  const box = $('dataScroll');
+  box.style.opacity = '.45';
+  try {
+    const sortQS = dataSort.col
+      ? `&sort=${encodeURIComponent(dataSort.col)}&dir=${dataSort.dir}` : '';
+    const paging = {page: dataPage, page_size: dataPageSize,
+                    sort: dataSort.col, dir: dataSort.dir};
+    const d = queryCode
+      // a question over a join runs against the joined frame
+      ? await post('/api/query', {file: dataFile, code: queryCode, joins: joinSpec, ...paging})
+      : joinSpec.length
+        ? await post('/api/join', {file: dataFile, joins: joinSpec, ...paging})
+        : await api(`/api/preview?file=${encodeURIComponent(dataFile)}`
+            + `&page=${dataPage}&page_size=${dataPageSize}${sortQS}`);
+    dataCache = d;
+    dataPage = d.page;
+    if (!colPrefsLoaded) { restoreColumnPrefs(d); colPrefsLoaded = true; }
+    renderPreview();
+  } catch (e) {
+    flash(e.message, 'danger');
+    $('dataTable').innerHTML = '';
+  } finally {
+    box.style.opacity = '1';
+  }
+}
+
+// --- joins remembered per base file ---
+function saveJoins() { if (dataFile) lsSet(LS_JOINS + dataFile, joinSpec); }
+function loadJoins() { joinSpec = dataFile ? lsGet(LS_JOINS + dataFile, []) : []; joinDraft = []; }
+
+// --- remembered column selection, per file ---
+function saveColumnPrefs() {
+  if (dataFile) lsSet(LS_COLS + dataFile, {mode: colMode, cols: [...chosenCols]});
+}
+
+function restoreColumnPrefs(d) {
+  const saved = lsGet(LS_COLS + d.file, null);
+  if (!saved) return;
+  // a file can change between visits — keep only columns it still has
+  const present = new Set(d.columns.map(c => c.name));
+  const cols = (saved.cols || []).filter(n => present.has(n));
+  if (saved.mode === 'chosen' && cols.length) {
+    chosenCols = new Set(cols);
+    colMode = 'chosen';
+  } else if (saved.mode === 'nopii') {
+    colMode = 'nopii';
+  }
+}
+
+// natural-language filter: the local LLM writes the pandas, the server runs it
+// under the usual guardrail and returns rows — nothing is written to disk
+async function runAsk(question) {
+  const state = $('askState');
+  state.hidden = false;
+  state.className = 'small mt-1 text-secondary';
+  state.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>asking the local model…`;
+  $('askRun').disabled = $('askInput').disabled = true;
+  $('dataScroll').style.opacity = '.45';
+  try {
+    const d = await post('/api/query',
+      {file: dataFile, question, joins: joinSpec, page: 1, page_size: dataPageSize,
+       sort: dataSort.col, dir: dataSort.dir});
+    queryCode = d.code;
+    dataCache = d;
+    dataPage = 1;
+    // a question that set up its own join hands the spec back — adopt it so the
+    // Join panel, its storage and this question's history entry all agree
+    if (d.joins_planned && (d.joins || []).length) {
+      joinSpec = d.joins.map(j => ({file: j.file, left_on: j.left_on,
+                                    right_on: j.right_on, how: j.how}));
+      saveJoins();
+      flash(`Joined from your question: ${joinSpec.map(j => baseOf(j.file)).join(', ')}`, 'info');
+    }
+    rememberAsk(question);   // only questions that actually ran
+    renderPreview();
+  } catch (e) {
+    state.className = 'small mt-1 text-danger';
+    state.textContent = e.message;
+  } finally {
+    $('askRun').disabled = $('askInput').disabled = false;
+    $('dataScroll').style.opacity = '1';
+  }
+}
+
+function clearAsk() {
+  queryCode = '';
+  $('askInput').value = '';
+  $('askState').hidden = true;
+  $('askClear').hidden = true;
+  dataPage = 1;
+  loadPreview();
+}
+
+// --- ask history: last 10 questions per file ---
+let askHistory = [];
+let askHighlight = -1;
+
+const askKey = () => LS_ASK + (dataFile || '');
+
+// entries are {q, joins}: a question that groups by a joined column is only
+// meaningful with the join that produced it, so the two travel together
+const loadAskHistory = () => {
+  askHistory = lsGet(askKey(), []).map(h => typeof h === 'string' ? {q: h, joins: []} : h);
+};
+
+function rememberAsk(question) {
+  const entry = {q: question, joins: joinSpec.map(j => ({...j}))};
+  askHistory = [entry, ...askHistory.filter(h => h.q !== question)].slice(0, ASK_HISTORY_MAX);
+  lsSet(askKey(), askHistory);
+}
+
+function askMatches() {
+  const q = $('askInput').value.trim().toLowerCase();
+  return askHistory.filter(h => !q || h.q.toLowerCase().includes(q));
+}
+
+const sameJoins = (a, b) => JSON.stringify(a || []) === JSON.stringify(b || []);
+
+function pickAsk(entry) {
+  $('askInput').value = entry.q;
+  hideAskHistory();
+  // restore the join the question was written against before re-running it
+  if (!sameJoins(entry.joins, joinSpec)) {
+    joinSpec = (entry.joins || []).map(j => ({...j}));
+    saveJoins();
+    flash(joinSpec.length
+      ? `Restored the join this question was saved with: ${joinSpec.map(j => baseOf(j.file)).join(', ')}`
+      : 'This question was saved without a join — joins removed.', 'info');
+  }
+  runAsk(entry.q);
+}
+
+function renderAskHistory() {
+  const box = $('askHistoryBox');
+  const items = askMatches();
+  // clear as well as hide: leaving the markup means another file's questions
+  // are still in the DOM, ready to flash up before the next render
+  if (!items.length) { box.innerHTML = ''; box.hidden = true; return; }
+  box.innerHTML = items.map((h, i) => {
+    const n = (h.joins || []).length;
+    const badge = n
+      ? `<span class="badge text-bg-primary pii-badge ms-1" title="${esc((h.joins || [])
+          .map(j => `${j.how} join ${baseOf(j.file)} on ${j.left_on} = ${j.right_on}`).join(', '))}">+${n} join${n > 1 ? 's' : ''}</span>`
+      : '';
+    return `<button type="button" class="list-group-item list-group-item-action py-1 small d-flex
+       align-items-center gap-1 ${i === askHighlight ? 'active' : ''}" data-ask="${i}"
+       title="${esc(h.q)}"><span class="text-truncate">${esc(h.q)}</span>${badge}</button>`;
+  }).join('') +
+    '<button type="button" class="list-group-item list-group-item-action py-1 small text-secondary"' +
+    ' data-ask-clear>Clear history</button>';
+  box.hidden = false;
+}
+
+const hideAskHistory = () => { $('askHistoryBox').hidden = true; askHighlight = -1; };
+
+$('askInput').addEventListener('focus', () => { askHighlight = -1; renderAskHistory(); });
+$('askInput').addEventListener('input', () => { askHighlight = -1; renderAskHistory(); });
+$('askInput').addEventListener('blur', () => setTimeout(hideAskHistory, 150));
+$('askInput').addEventListener('keydown', ev => {
+  const items = askMatches();
+  if (ev.key === 'Escape') return hideAskHistory();
+  if (!items.length) return;
+  if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+    ev.preventDefault();
+    askHighlight += ev.key === 'ArrowDown' ? 1 : -1;
+    askHighlight = (askHighlight + items.length) % items.length;
+    renderAskHistory();
+  } else if (ev.key === 'Enter' && askHighlight >= 0) {
+    ev.preventDefault();
+    pickAsk(items[askHighlight]);
+  }
+});
+// mousedown, not click: blur fires first and would hide the list
+$('askHistoryBox').addEventListener('mousedown', ev => {
+  ev.preventDefault();
+  if (ev.target.closest('[data-ask-clear]')) {
+    askHistory = [];
+    lsSet(askKey(), askHistory);   // this file only; other files keep theirs
+    hideAskHistory();
+    return;
+  }
+  const pick = ev.target.closest('[data-ask]');
+  if (!pick) return;
+  const entry = askMatches()[Number(pick.dataset.ask)];
+  if (entry) pickAsk(entry);
+});
+
+$('askForm').addEventListener('submit', ev => {
+  ev.preventDefault();
+  hideAskHistory();
+  const q = $('askInput').value.trim();
+  if (q) runAsk(q);
+});
+$('askClear').addEventListener('click', clearAsk);
+
+function renderPreview() {
+  const d = dataCache;
+  if (!d) return;
+  $('dataName').textContent = baseOf(d.file);
+  $('dataFolder').textContent = dirOf(d.file);
+  $('dataFolder').title = dirOf(d.file);
+  $('dataConfigure').href = '#/file=' + encodeURIComponent(d.file);
+  const joinBadge = (d.joins || []).length
+    ? `<span class="badge text-bg-primary pii-badge me-1" title="${esc((d.joins || [])
+        .map(j => `${j.how} join on ${j.left_on} = ${j.right_on}`).join(', '))}">joined: `
+      + (d.joins || []).map(j => esc(j.name)).join(', ') + '</span>'
+    : '';
+  $('dataMeta').innerHTML = joinBadge +
+    (d.code
+      ? `<span class="badge text-bg-info pii-badge me-1">filtered</span>` +
+        `${d.n_rows.toLocaleString()} of ${(d.file_rows ?? d.n_rows).toLocaleString()} rows`
+      : `${d.n_rows.toLocaleString()} rows`) +
+    ` &middot; ${d.columns.length} columns &middot; ` +
+    `<span class="badge text-bg-${d.redacted_columns.length ? 'danger' : 'secondary'} pii-badge">` +
+    `${d.redacted_columns.length} PII</span> ${srcBadge(d.pii_source)}`;
+
+  if (d.code) {
+    $('askState').hidden = false;
+    $('askState').className = 'small mt-1 text-secondary';
+    $('askState').innerHTML = `${d.n_rows.toLocaleString()} matching row(s) &middot; ` +
+      `<code class="text-body-secondary">${esc(d.code)}</code>`;
+    $('askClear').hidden = false;
+  }
+
+  const q = colQuery.trim().toLowerCase();
+  const cols = d.columns
+    .map((c, i) => ({...c, i}))
+    .filter(c =>
+      (colMode === 'all'
+        || (colMode === 'nopii' && !c.pii)
+        || (colMode === 'chosen' && chosenCols.has(c.name)))
+      && (!q || c.name.toLowerCase().includes(q)));
+  $('colInfo').textContent = cols.length === d.columns.length
+    ? '' : `${cols.length} of ${d.columns.length} columns`;
+  $('colAll').classList.toggle('active', colMode === 'all');
+  $('colHidePii').classList.toggle('active', colMode === 'nopii');
+  $('colChoose').classList.toggle('active', colMode === 'chosen');
+  $('colChoose').textContent = colMode === 'chosen'
+    ? `Chosen (${chosenCols.size})` : 'Choose…';
+
+  if (!cols.length) {
+    $('dataTable').innerHTML =
+      '<tbody><tr><td class="text-secondary p-3">No column matches that filter.</td></tr></tbody>';
+  } else {
+    const rowActive = dataSort.col === ROW_SORT_KEY;
+    const rowNext = !rowActive ? 'asc' : dataSort.dir === 'asc' ? 'desc' : 'none';
+    const rowHead = `<th class="rownum sort-col${rowActive ? ' sorted' : ''}"
+        data-col="${ROW_SORT_KEY}"
+        title="row in the file — ${rowActive
+          ? 'sorted ' + sortLabel('row', dataSort.dir) + ', click to ' +
+            (rowNext === 'none' ? 'clear' : 'reverse')
+          : 'click to sort ' + sortLabel('row', 'asc')}">
+        #<span class="sort-mark">${rowActive ? (dataSort.dir === 'asc' ? '↑' : '↓') : '↕'}</span></th>`;
+    const head = '<thead><tr>' + rowHead + cols.map(c => {
+      const active = dataSort.col === c.name;
+      const next = !active ? 'asc' : dataSort.dir === 'asc' ? 'desc' : 'none';
+      return `<th class="sort-col${c.numeric ? ' text-end' : ''}${active ? ' sorted' : ''}"
+           data-col="${esc(c.name)}"
+           title="${esc(c.name)} — ${esc(c.dtype)}\n${active
+             ? 'sorted ' + sortLabel(c.kind, dataSort.dir) + ' — click to ' +
+               (next === 'none' ? 'clear' : 'sort ' + sortLabel(c.kind, next))
+             : 'click to sort ' + sortLabel(c.kind, 'asc')}">
+         ${esc(c.name)}${c.pii ? ' <span class="badge text-bg-danger pii-badge">PII</span>' : ''}
+         <span class="sort-mark">${active ? (dataSort.dir === 'asc' ? '↑' : '↓') : '↕'}</span>
+         <div class="col-dtype">${active ? sortLabel(c.kind, dataSort.dir) : esc(c.dtype)}</div>
+       </th>`;
+    }).join('') + '</tr></thead>';
+    const body = '<tbody>' + d.rows.map((row, ri) =>
+      `<tr><td class="rownum" title="row in the file">` +
+      `${((d.row_numbers ? d.row_numbers[ri] : d.start + ri + 1)).toLocaleString()}</td>`
+      + cols.map(c => {
+        const v = row[c.i];
+        const cls = c.pii ? 'cell-mask' : v === '—' ? 'cell-null'
+          : c.numeric ? 'num' : '';
+        return `<td class="${cls}" title="${esc(v)}">${esc(v)}</td>`;
+      }).join('') + '</tr>').join('') + '</tbody>';
+    $('dataTable').innerHTML = head + body;
+  }
+
+  const to = d.start + d.rows.length;
+  $('dataRange').textContent = d.n_rows
+    ? `${(d.start + 1).toLocaleString()}–${to.toLocaleString()} of ${d.n_rows.toLocaleString()}`
+      + `  ·  page ${d.page} / ${d.n_pages}`
+    : 'empty file';
+  $('dataFirst').disabled = $('dataPrev').disabled = d.page === 1;
+  $('dataLast').disabled = $('dataNext').disabled = d.page === d.n_pages;
+  $('dataFooter').textContent = d.redacted_columns.length
+    ? `Masked in this view and in EDA output: ${d.redacted_columns.join(', ')}`
+    : 'No PII columns detected for this file.';
+}
+
+// click cycles a column: unsorted -> ascending -> descending -> back to file order
+$('dataTable').addEventListener('click', ev => {
+  const th = ev.target.closest('th.sort-col');
+  if (!th) return;
+  const col = th.dataset.col;
+  dataSort = dataSort.col !== col ? {col, dir: 'asc'}
+    : dataSort.dir === 'asc' ? {col, dir: 'desc'}
+    : {col: '', dir: 'asc'};
+  dataPage = 1;
+  loadPreview();
+});
+
+// --- join builder ---
+const MAX_JOINS = 4;
+const JOIN_HOWS = ['left', 'inner', 'right', 'outer'];
+const colsCache = {};
+
+async function columnsOf(file) {
+  if (!colsCache[file]) {
+    const d = await api('/api/columns?file=' + encodeURIComponent(file));
+    colsCache[file] = {all: d.columns, pii: new Set(d.selected)};
+  }
+  return colsCache[file];
+}
+
+function renderJoinRows() {
+  const files = filesCache.filter(f => !f.error && f.path !== dataFile).map(f => f.path);
+  $('joinRows').innerHTML = joinDraft.map((j, i) => {
+    const right = colsCache[j.file];
+    const opt = (list, sel, piiSet) => list.map(c =>
+      `<option value="${esc(c)}"${c === sel ? ' selected' : ''}>
+         ${esc(c)}${piiSet?.has(c) ? ' 🛡' : ''}</option>`).join('');
+    return `<div class="row g-2 align-items-end mb-2" data-join="${i}">
+      <div class="col-md-4">
+        ${i === 0 ? '<label class="form-label small mb-1">File</label>' : ''}
+        <select class="form-select form-select-sm" data-jf>
+          <option value="">choose a file…</option>
+          ${files.map(f => `<option value="${esc(f)}"${f === j.file ? ' selected' : ''}>${esc(baseOf(f))}</option>`).join('')}
+        </select>
+      </div>
+      <div class="col-md-3">
+        ${i === 0 ? '<label class="form-label small mb-1">Column here</label>' : ''}
+        <select class="form-select form-select-sm" data-jl>
+          <option value="">column…</option>
+          ${opt(baseColumns.all || [], j.left_on, baseColumns.pii)}
+        </select>
+      </div>
+      <div class="col-md-3">
+        ${i === 0 ? '<label class="form-label small mb-1">Column there</label>' : ''}
+        <select class="form-select form-select-sm" data-jr ${right ? '' : 'disabled'}>
+          <option value="">${right ? 'column…' : 'pick a file first'}</option>
+          ${right ? opt(right.all, j.right_on, right.pii) : ''}
+        </select>
+      </div>
+      <div class="col-md-1">
+        ${i === 0 ? '<label class="form-label small mb-1">Type</label>' : ''}
+        <select class="form-select form-select-sm" data-jh>
+          ${JOIN_HOWS.map(h => `<option${h === j.how ? ' selected' : ''}>${h}</option>`).join('')}
+        </select>
+      </div>
+      <div class="col-md-1">
+        <button class="btn btn-sm btn-outline-danger w-100" data-jdel type="button" title="Remove">&times;</button>
+      </div>
+    </div>`;
+  }).join('') || '<p class="text-secondary small mb-2">No join yet — add one below.</p>';
+  $('joinAdd').disabled = joinDraft.length >= MAX_JOINS;
+}
+
+$('joinModal').addEventListener('show.bs.modal', async () => {
+  $('joinBase').textContent = dataFile || '';
+  $('joinMax').textContent = MAX_JOINS;
+  // the viewer can be opened by URL without the Files view ever loading
+  if (!filesCache.length) {
+    try { filesCache = (await api('/api/files')).files; } catch (e) { /* leave empty */ }
+  }
+  joinDraft = joinSpec.length ? joinSpec.map(j => ({...j}))
+    : [{file: '', left_on: '', right_on: '', how: 'left'}];
+  baseColumns = await columnsOf(dataFile).catch(() => ({all: [], pii: new Set()}));
+  await Promise.all(joinDraft.filter(j => j.file).map(j => columnsOf(j.file).catch(() => null)));
+  renderJoinRows();
+});
+$('joinAdd').addEventListener('click', () => {
+  if (joinDraft.length < MAX_JOINS) {
+    joinDraft.push({file: '', left_on: '', right_on: '', how: 'left'});
+    renderJoinRows();
+  }
+});
+$('joinRows').addEventListener('change', async ev => {
+  const row = ev.target.closest('[data-join]');
+  if (!row) return;
+  const j = joinDraft[Number(row.dataset.join)];
+  if (ev.target.matches('[data-jf]')) {
+    j.file = ev.target.value;
+    j.right_on = '';
+    if (j.file) await columnsOf(j.file).catch(() => null);
+    renderJoinRows();
+  } else if (ev.target.matches('[data-jl]')) {
+    j.left_on = ev.target.value;
+  } else if (ev.target.matches('[data-jr]')) {
+    j.right_on = ev.target.value;
+  } else if (ev.target.matches('[data-jh]')) {
+    j.how = ev.target.value;
+  }
+});
+$('joinRows').addEventListener('click', ev => {
+  const del = ev.target.closest('[data-jdel]');
+  if (!del) return;
+  joinDraft.splice(Number(del.closest('[data-join]').dataset.join), 1);
+  renderJoinRows();
+});
+$('joinApply').addEventListener('click', () => {
+  const ready = joinDraft.filter(j => j.file && j.left_on && j.right_on);
+  if (ready.length !== joinDraft.filter(j => j.file).length) {
+    flash('Every join needs a file and a column on both sides.', 'warning');
+  }
+  joinSpec = ready;
+  saveJoins();
+  dataPage = 1;
+  loadPreview();
+});
+$('joinReset').addEventListener('click', () => {
+  joinSpec = [];
+  joinDraft = [];
+  saveJoins();
+  // an active question was written against the joined columns and cannot
+  // survive without them, so drop the filter with the join
+  if (queryCode) {
+    queryCode = '';
+    $('askInput').value = '';
+    $('askState').hidden = true;
+    $('askClear').hidden = true;
+  }
+  dataPage = 1;
+  loadPreview();
+});
+
+const goPage = n => { dataPage = n; loadPreview(); };
+$('dataFirst').addEventListener('click', () => goPage(1));
+$('dataPrev').addEventListener('click', () => goPage(dataPage - 1));
+$('dataNext').addEventListener('click', () => goPage(dataPage + 1));
+$('dataLast').addEventListener('click', () => goPage(dataCache ? dataCache.n_pages : 1));
+$('dataPageSize').addEventListener('change', e => {
+  dataPageSize = Number(e.target.value);
+  goPage(1);
+});
+$('colSearch').addEventListener('input', e => { colQuery = e.target.value; renderPreview(); });
+$('colAll').addEventListener('click', () => { colMode = 'all'; saveColumnPrefs(); renderPreview(); });
+$('colHidePii').addEventListener('click', () => { colMode = 'nopii'; saveColumnPrefs(); renderPreview(); });
+
+// --- column picker ---
+function renderColPicker() {
+  const d = dataCache;
+  if (!d) return;
+  const q = $('colModalSearch').value.trim().toLowerCase();
+  const shown = d.columns.filter(c => !q || c.name.toLowerCase().includes(q));
+  $('colPickList').innerHTML = shown.map(c => `
+    <div class="col">
+      <label class="d-flex align-items-center gap-2 border rounded px-2 py-1 mb-0">
+        <input class="form-check-input mt-0 flex-shrink-0" type="checkbox"
+               data-col="${esc(c.name)}" ${pickDraft.has(c.name) ? 'checked' : ''}>
+        <span class="text-truncate" title="${esc(c.name)}">${esc(c.name)}</span>
+        ${c.pii ? '<span class="badge text-bg-danger pii-badge flex-shrink-0">PII</span>' : ''}
+        <span class="col-dtype ms-auto flex-shrink-0">${esc(c.dtype)}</span>
+      </label>
+    </div>`).join('') || '<div class="text-secondary p-2">No column matches that search.</div>';
+  $('colPickCount').textContent =
+    `${pickDraft.size} of ${d.columns.length} selected` +
+    (q ? ` · ${shown.length} shown` : '');
+}
+
+// the quick actions apply to what the search is showing, so you can pick a
+// group of columns by name without touching the rest of the selection
+const pickVisible = () => [...document.querySelectorAll('#colPickList input[data-col]')]
+  .map(i => i.dataset.col);
+
+$('colModal').addEventListener('show.bs.modal', () => {
+  if (!dataCache) return;
+  pickDraft = new Set(colMode === 'chosen' && chosenCols.size
+    ? chosenCols
+    : dataCache.columns.filter(c => colMode !== 'nopii' || !c.pii).map(c => c.name));
+  $('colModalSearch').value = '';
+  renderColPicker();
+});
+$('colModal').addEventListener('shown.bs.modal', () => $('colModalSearch').focus());
+$('colModalSearch').addEventListener('input', renderColPicker);
+$('colPickList').addEventListener('change', ev => {
+  const box = ev.target.closest('input[data-col]');
+  if (!box) return;
+  box.checked ? pickDraft.add(box.dataset.col) : pickDraft.delete(box.dataset.col);
+  $('colPickCount').textContent = `${pickDraft.size} of ${dataCache.columns.length} selected`;
+});
+$('colPickAll').addEventListener('click', () => {
+  pickVisible().forEach(n => pickDraft.add(n));
+  renderColPicker();
+});
+$('colPickNone').addEventListener('click', () => {
+  pickVisible().forEach(n => pickDraft.delete(n));
+  renderColPicker();
+});
+$('colPickNonPii').addEventListener('click', () => {
+  const pii = new Set(dataCache.columns.filter(c => c.pii).map(c => c.name));
+  pickVisible().forEach(n => pii.has(n) ? pickDraft.delete(n) : pickDraft.add(n));
+  renderColPicker();
+});
+$('colApply').addEventListener('click', () => {
+  if (!pickDraft.size) {
+    colMode = 'all';
+    flash('No column selected — showing all of them.', 'warning');
+  } else {
+    chosenCols = new Set(pickDraft);
+    colMode = chosenCols.size === dataCache.columns.length ? 'all' : 'chosen';
+  }
+  saveColumnPrefs();
+  renderPreview();
+});
+
+// ←/→ (and PageUp/PageDown) page through the file when not typing in a field
+document.addEventListener('keydown', ev => {
+  if ($('view-data').hidden || /^(INPUT|SELECT|TEXTAREA)$/.test(ev.target.tagName)) return;
+  const back = ev.key === 'ArrowLeft' || ev.key === 'PageUp';
+  const fwd = ev.key === 'ArrowRight' || ev.key === 'PageDown';
+  if (!back && !fwd) return;
+  ev.preventDefault();
+  if (back && !$('dataPrev').disabled) goPage(dataPage - 1);
+  if (fwd && !$('dataNext').disabled) goPage(dataPage + 1);
+});
+
+// --- detail view ---
+async function loadDetail() {
+  const d = await api('/api/columns?file=' + encodeURIComponent(detailFile));
+  $('detailPath').textContent = detailFile;
+  $('detailViewData').href = '#/view=' + encodeURIComponent(detailFile);
+  $('detailSource').innerHTML = srcBadge(d.source);
+  $('colsBody').innerHTML = d.columns.map(c => {
+    const auto = d.auto.find(a => a.column === c);
+    return `<tr>
+      <td><input class="form-check-input" type="checkbox" data-col="${c}" ${d.selected.includes(c) ? 'checked' : ''} onchange="updateCount()"></td>
+      <td>${c}</td>
+      <td>${auto ? `<span class="badge text-bg-warning pii-badge">${auto.pii_type}</span>` : ''}</td>
+    </tr>`;
+  }).join('');
+  updateCount();
+}
+function updateCount() {
+  const n = document.querySelectorAll('#colsBody input:checked').length;
+  $('checkedCount').textContent = n + ' column(s) marked as PII';
+}
+async function savePii() {
+  const cols = [...document.querySelectorAll('#colsBody input:checked')].map(x => x.dataset.col);
+  try {
+    await post('/api/pii', {file: detailFile, columns: cols});
+    flash(`Saved — ${cols.length} PII column(s) for <code>${detailFile}</code>`);
+    loadDetail();
+  } catch (e) { flash(e.message, 'danger'); }
+}
+async function resetPii() {
+  try {
+    await post('/api/pii', {file: detailFile, reset: true});
+    flash('Reset to auto-detection');
+    loadDetail();
+  } catch (e) { flash(e.message, 'danger'); }
+}
+
+// --- sources view ---
+async function loadSources() {
+  const d = await api('/api/files');
+  const registered = new Set(d.sources);
+  $('mountedList').innerHTML = (d.mounted || []).map(s => `
+    <li class="list-group-item d-flex justify-content-between align-items-center gap-2">
+      <code class="small">${esc(s)}</code>
+      <span class="d-flex align-items-center gap-2">
+        <span class="badge text-bg-info pii-badge">read-only</span>
+        ${registered.has(s)
+          ? '<span class="badge text-bg-success pii-badge">added</span>'
+          : `<button class="btn btn-sm btn-outline-success" onclick="addSource('${esc(s)}')">Add all</button>`}
+      </span>
+    </li>`).join('') || '<li class="list-group-item text-secondary">None — add entries to CSV_SOURCES in .env and re-run start.sh.</li>';
+  $('sourcesList').innerHTML = d.sources.map(s => `
+    <li class="list-group-item d-flex justify-content-between align-items-center">
+      <code class="small">${s}</code>
+      <button class="btn btn-sm btn-outline-danger" onclick="removeSource('${s}')">Remove</button>
+    </li>`).join('') || '<li class="list-group-item text-secondary">None — only the data directory is readable.</li>';
+  if (browseState.path === null) browseRoots(); else browse(browseState.path);
+}
+async function browseRoots() {
+  const d = await api('/api/browse');
+  if (d.roots.length === 1) return browse(d.roots[0]);
+  browseState = {path: null, parent: null};
+  $('browsePath').textContent = '(roots)';
+  $('upBtn').disabled = true;
+  $('addDirBtn').hidden = true;
+  $('browseList').innerHTML = d.roots.map(r =>
+    `<li class="list-group-item list-group-item-action" style="cursor:pointer" onclick="browse('${r}')">📁 <code>${r}</code></li>`).join('');
+}
+async function browse(path) {
+  try {
+    const d = await api('/api/browse?path=' + encodeURIComponent(path));
+    browseState = d;
+    $('browsePath').textContent = d.path;
+    $('upBtn').disabled = false;
+    $('addDirBtn').hidden = false;
+    $('browseList').innerHTML =
+      d.dirs.map(n => `<li class="list-group-item list-group-item-action" style="cursor:pointer" onclick="browse('${d.path}/${n}')">📁 ${n}</li>`).join('') +
+      d.csvs.map(n => `<li class="list-group-item d-flex justify-content-between align-items-center">
+          <span>📄 ${n}</span>
+          <button class="btn btn-sm btn-outline-success" onclick="addSource('${d.path}/${n}')">Add file</button>
+        </li>`).join('') ||
+      '<li class="list-group-item text-secondary">empty</li>';
+  } catch (e) { flash(e.message, 'danger'); }
+}
+function browseUp() { browseState.parent ? browse(browseState.parent) : browseRoots(); }
+async function addSource(path) {
+  try {
+    await post('/api/sources', {path});
+    flash(`Source added: <code>${path}</code>`);
+    loadSources();
+  } catch (e) { flash(e.message, 'danger'); }
+}
+async function removeSource(path) {
+  await post('/api/sources', {path, remove: true});
+  loadSources();
+}
+
+route();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

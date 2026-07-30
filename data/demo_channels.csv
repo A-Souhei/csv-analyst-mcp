@@ -1,0 +1,5 @@
+channel,acquisition_cost,is_paid
+web,12.5,false
+mobile,18.0,false
+partner,45.0,true
+referral,8.25,true
