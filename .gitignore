@@ -3,3 +3,4 @@ docker-compose.override.yml
 data/config.json
 __pycache__/
 data/reports/
+data/exports/

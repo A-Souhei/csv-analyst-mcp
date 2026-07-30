@@ -11,6 +11,14 @@ set -a; source .env; set +a
   echo "  csv-analyst:"
   echo "    ports:"
   echo "      - \"${PORT:-41733}:41733\""
+  # "utility" injects nvidia-smi and libnvidia-ml only — no CUDA runtime — which is
+  # all llm_status needs to read VRAM. Skipped entirely on hosts without the runtime.
+  if docker info 2>/dev/null | grep -q "Runtimes:.*nvidia"; then
+    echo "    runtime: nvidia"
+    echo "    environment:"
+    echo "      NVIDIA_VISIBLE_DEVICES: all"
+    echo "      NVIDIA_DRIVER_CAPABILITIES: utility"
+  fi
   if [ -n "${CSV_SOURCES:-}" ]; then
     echo "    volumes:"
     IFS=',' read -ra entries <<<"$CSV_SOURCES"

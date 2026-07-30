@@ -11,6 +11,8 @@ import io
 import json
 import os
 import re
+import shutil
+import subprocess
 import contextlib
 import warnings
 from datetime import datetime
@@ -21,11 +23,12 @@ import numpy as np
 import pandas as pd
 from mcp.server.mcpserver import MCPServer
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, Response
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", ".")).resolve()
 CONFIG_FILE = DATA_DIR / "config.json"
 REPORTS_DIR = DATA_DIR / "reports"
+EXPORTS_DIR = DATA_DIR / "exports"
 # base URL reports are reachable at (e.g. the tailnet hostname); relative when unset
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 TEMPLATES = Path(__file__).parent / "templates"
@@ -41,6 +44,10 @@ ROW_SORT_KEY = "__row__"  # the viewer's row-number gutter
 REDACTION_MASK = os.environ.get("REDACTION_MASK", "***")
 LOCAL_LLM_URL = os.environ.get("LOCAL_LLM_URL", "").rstrip("/")
 LOCAL_LLM_MODEL = os.environ.get("LOCAL_LLM_MODEL", "local")
+# llama-swap's control API sits above its per-model /upstream/<model>/v1 proxy
+LLAMA_SWAP_URL = (
+    os.environ.get("LLAMA_SWAP_URL") or LOCAL_LLM_URL.split("/upstream/")[0]
+).rstrip("/").removesuffix("/v1")
 
 mcp = MCPServer("csv-analyst")
 
@@ -861,7 +868,158 @@ def visualize(
     }
 
 
+@mcp.tool()
+def export_table(
+    path: str,
+    code: str = "df",
+    joins: list[dict] | None = None,
+    format: str = "csv",
+    columns: list[str] | None = None,
+    sort: str = "",
+    dir: str = "asc",
+) -> dict:
+    """Write the result of an EDA view to a CSV or Excel file and return its URL.
+
+    Same guardrail as run_eda: PII columns are masked before the code runs, so the
+    exported file carries "***" wherever a column is masked — an export can never
+    contain values the tools would not show. The file is written to the server's
+    exports directory and served over the same host as the reports; treat that as
+    a shared location rather than a private one.
+
+    Args:
+        path: CSV file path.
+        code: pandas code whose last expression is the table to export (default
+            "df" — the whole file).
+        joins: other files to join in first (see run_eda).
+        format: "csv" or "xlsx".
+        columns: restrict the export to these columns, in this order.
+        sort: column to sort by before exporting.
+        dir: "asc" or "desc".
+    """
+    p = _resolve(path)
+    frame, redacted, label = _view_frame(p, {
+        "code": code, "joins": joins or [], "columns": columns or [], "sort": sort, "dir": dir,
+    })
+    truncated = len(frame) > MAX_EXPORT_ROWS
+    frame = frame.head(MAX_EXPORT_ROWS)
+
+    fmt = "xlsx" if str(format).lower() in ("xlsx", "excel") else "csv"
+    name = f"{p.stem}-{label}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.{fmt}"
+    EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    target = EXPORTS_DIR / name
+    if fmt == "xlsx":
+        frame.to_excel(target, index=False, sheet_name=p.stem[:28] or "data")
+    else:
+        frame.to_csv(target, index=False)
+
+    return {
+        "url": f"{PUBLIC_BASE_URL}/exports/{name}" if PUBLIC_BASE_URL else f"/exports/{name}",
+        "format": fmt,
+        "n_rows": len(frame),
+        "n_columns": len(frame.columns),
+        "columns": [str(c) for c in frame.columns],
+        "redacted_columns": [c for c in redacted if c in frame.columns],
+        "truncated": truncated,
+    }
+
+
+# --- local LLM / GPU ---
+
+def _vram() -> list[dict] | None:
+    """GPU memory per device, or None when the container cannot see a GPU."""
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        return None
+    try:
+        out = subprocess.run(
+            [exe, "--query-gpu=name,memory.used,memory.total", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=10,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    gpus = []
+    for line in out.splitlines():
+        parts = [x.strip() for x in line.split(",")]
+        if len(parts) != 3 or not parts[1].isdigit():
+            continue
+        used, total = int(parts[1]), int(parts[2])
+        gpus.append({
+            "name": parts[0],
+            "used_mib": used,
+            "free_mib": total - used,
+            "total_mib": total,
+            "used_pct": round(100 * used / total, 1) if total else None,
+        })
+    return gpus or None
+
+
+def _swap_running() -> list[dict]:
+    import httpx
+
+    if not LLAMA_SWAP_URL:
+        raise ValueError("no llama-swap endpoint (set LLAMA_SWAP_URL, or LOCAL_LLM_URL in .env)")
+    r = httpx.get(f"{LLAMA_SWAP_URL}/running", timeout=10)
+    r.raise_for_status()
+    return [
+        {"model": m.get("model"), "state": m.get("state"), "idle_ttl_seconds": m.get("ttl")}
+        for m in (r.json().get("running") or [])
+    ]
+
+
+@mcp.tool()
+def llm_status() -> dict:
+    """Report GPU memory and which local models are currently loaded.
+
+    Worth checking before a long local-LLM step, or to decide whether to call llm_stop:
+    VRAM is shared with everything else on the machine, so a model left loaded can be
+    what stops the next one from fitting. "gpus" is null when the container has no GPU
+    visibility — "loaded" still answers the question in that case.
+    """
+    gpus = _vram()
+    loaded = _swap_running()
+    return {
+        "endpoint": LLAMA_SWAP_URL,
+        "configured_model": LOCAL_LLM_MODEL,
+        "gpus": gpus,
+        "loaded": loaded,
+        "n_loaded": len(loaded),
+    }
+
+
+@mcp.tool()
+def llm_stop() -> dict:
+    """Unload every model llama-swap is holding, freeing GPU VRAM immediately.
+
+    llama-swap already unloads a model once its idle TTL expires; this is the "give the
+    VRAM back now" button. It applies to the whole llama-swap instance, so it also stops
+    models loaded by other clients — the return value names what was stopped.
+    """
+    import httpx
+
+    stopped = _swap_running()
+    httpx.get(f"{LLAMA_SWAP_URL}/unload", timeout=60).raise_for_status()
+    return {
+        "stopped": [m["model"] for m in stopped],
+        "still_loaded": [m["model"] for m in _swap_running()],
+        "gpus": _vram(),
+    }
+
+
 # --- webui ---
+
+@mcp.custom_route("/exports/{name}", methods=["GET"])
+async def export_file(request: Request):
+    f = EXPORTS_DIR / Path(request.path_params["name"]).name
+    if f.suffix not in (".csv", ".xlsx") or not f.is_file():
+        return JSONResponse({"error": "no such export"}, status_code=404)
+    media = ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+             if f.suffix == ".xlsx" else "text/csv; charset=utf-8")
+    return Response(
+        content=f.read_bytes(),
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{f.name}"'},
+    )
+
 
 @mcp.custom_route("/", methods=["GET"])
 async def ui(_: Request):
@@ -1253,6 +1411,100 @@ def _paged_frame_response(
         "pii_source": "manual" if _pii_override(p) is not None else "auto",
         **extra,
     })
+
+
+MAX_EXPORT_ROWS = 200_000
+
+
+def _masked_file_frame(p: Path) -> tuple[pd.DataFrame, list[str]]:
+    frame = _load(p)
+    redacted = _pii_columns_of(p, list(frame.columns))
+    for col in redacted:
+        frame[col] = frame[col].where(frame[col].isna(), REDACTION_MASK)
+    return frame, redacted
+
+
+def _view_frame(p: Path, body: dict) -> tuple[pd.DataFrame, list[str], str]:
+    """Rebuild what the viewer is currently showing — joins, question and sort —
+    as a whole frame rather than a page. Masked exactly as on screen."""
+    joins = body.get("joins") or []
+    code = (body.get("code") or "").strip()
+    if code == "df":  # the default "whole file" code is not a filter
+        code = ""
+
+    if joins:
+        frame, redacted, _, _ = _build_join(p, joins)
+        label = "joined"
+    else:
+        frame, redacted = _masked_file_frame(p)
+        label = "table"
+
+    if code:
+        _, result, _ = _run_code(code, frame, redacted)
+        if isinstance(result, pd.Series):
+            result = result.to_frame(name=result.name if result.name is not None else "value")
+        if not isinstance(result, pd.DataFrame):
+            raise ValueError("the current view is not a table")
+        frame = result
+        if not isinstance(frame.index, pd.RangeIndex) and not pd.api.types.is_integer_dtype(frame.index):
+            frame = frame.reset_index()
+        label = "filtered"
+
+    sort_col = str(body.get("sort") or "")
+    if sort_col and sort_col != ROW_SORT_KEY and sort_col in frame.columns:
+        frame = frame.loc[
+            _sort_key(frame[sort_col], _column_kind(frame[sort_col])).sort_values(
+                ascending=body.get("dir", "asc") != "desc", kind="stable", na_position="last"
+            ).index
+        ]
+    elif sort_col == ROW_SORT_KEY:
+        frame = frame.sort_index(ascending=body.get("dir", "asc") != "desc")
+
+    # only the columns on screen, in the order the viewer shows them
+    chosen = [c for c in (body.get("columns") or []) if c in frame.columns]
+    if chosen:
+        frame = frame[chosen]
+    return frame.reset_index(drop=True), redacted, label
+
+
+@mcp.custom_route("/api/export", methods=["POST"])
+async def api_export(request: Request):
+    """Download the current view as CSV or Excel, masked the same way it is shown."""
+    body = await request.json()
+    try:
+        p = _resolve(str(body.get("file", "")))
+        frame, redacted, label = _view_frame(p, body)
+    except (ValueError, FileNotFoundError) as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=422)
+
+    truncated = len(frame) > MAX_EXPORT_ROWS
+    frame = frame.head(MAX_EXPORT_ROWS)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    fmt = "xlsx" if str(body.get("format", "csv")).lower() in ("xlsx", "excel") else "csv"
+    name = f"{p.stem}-{label}-{stamp}.{fmt}"
+
+    buffer = io.BytesIO()
+    if fmt == "xlsx":
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            frame.to_excel(writer, index=False, sheet_name=p.stem[:28] or "data")
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    else:
+        buffer.write(frame.to_csv(index=False).encode("utf-8-sig"))  # BOM: Excel opens it cleanly
+        media = "text/csv; charset=utf-8"
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type=media,
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            "X-Export-Rows": str(len(frame)),
+            "X-Export-Truncated": "1" if truncated else "0",
+            "X-Export-Redacted": ", ".join(c for c in redacted if c in frame.columns),
+            "Access-Control-Expose-Headers": "Content-Disposition, X-Export-Rows, X-Export-Truncated, X-Export-Redacted",
+        },
+    )
 
 
 @mcp.custom_route("/api/join", methods=["POST"])
