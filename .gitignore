@@ -4,3 +4,4 @@ data/config.json
 __pycache__/
 data/reports/
 data/exports/
+.claude/
