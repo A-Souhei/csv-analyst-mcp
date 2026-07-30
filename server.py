@@ -1080,6 +1080,9 @@ FILTER_PROMPT = (
     "    g[g['n'] > 20]\n"
     "- NA / empty / missing / blank means a null value — use .isna() or .notna(). "
     "Compare against the text 'NA' only if the question says the literal text.\n"
+    "- The table shows missing values as an em dash. It is a display placeholder, never a "
+    "value: read \"col != —\" as col.notna() and \"col = —\" as col.isna(), and never "
+    "compare a column to '—' or '-'.\n"
     "- Columns marked PII hold \"***\" instead of their real values: never filter on them.\n"
 )
 
