@@ -293,12 +293,14 @@ const flash = (msg, kind = 'success') => {
 const LS_ASK = 'csvAnalyst.ask:';   // one key per file — questions are about its columns
 const LS_COLS = 'csvAnalyst.columns:';
 const LS_JOINS = 'csvAnalyst.joins:';
+const LS_FILTER = 'csvAnalyst.filter:';   // the question in force, with the code it ran
 const ASK_HISTORY_MAX = 10;
 const lsGet = (key, fallback) => {
   try { const v = localStorage.getItem(key); return v === null ? fallback : JSON.parse(v); }
   catch (e) { return fallback; }
 };
 const lsSet = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) {} };
+const lsDel = key => { try { localStorage.removeItem(key); } catch (e) {} };
 // history used to be one shared list; drop the leftover so it stops taking space
 try { localStorage.removeItem('csvAnalyst.askHistory'); } catch (e) {}
 
@@ -318,9 +320,10 @@ function route() {
       colMode = 'all'; chosenCols = new Set(); viewColumns = [];
       dataSort = {col: '', dir: 'asc'};
       colPrefsLoaded = false;
+      $('askState').hidden = true; $('askClear').hidden = true;
       loadAskHistory();
       loadJoins();
-      $('askInput').value = ''; $('askState').hidden = true; $('askClear').hidden = true;
+      loadFilter();   // puts the last question back in the box and re-applies it
     }
     $('view-data').hidden = false;
     document.querySelector('[data-nav=files]').classList.add('active');
@@ -532,8 +535,18 @@ async function loadPreview() {
     // no filter in play, so this is the full set the picker can offer
     if (!d.code) viewColumns = d.columns;
     if (!colPrefsLoaded) { restoreColumnPrefs(d); colPrefsLoaded = true; }
+    restoredFilter = false;
     renderPreview();
   } catch (e) {
+    // a remembered filter can outlive the columns it was written against —
+    // drop it and show the file rather than leaving the viewer on an error
+    if (restoredFilter) {
+      restoredFilter = false;
+      flash(`Your saved question no longer runs on this file (${e.message}) — showing everything.`,
+            'warning');
+      clearAsk();
+      return;
+    }
     flash(e.message, 'danger');
     $('dataTable').innerHTML = '';
   } finally {
@@ -544,6 +557,25 @@ async function loadPreview() {
 // --- joins remembered per base file ---
 function saveJoins() { if (dataFile) lsSet(LS_JOINS + dataFile, joinSpec); }
 function loadJoins() { joinSpec = dataFile ? lsGet(LS_JOINS + dataFile, []) : []; joinDraft = []; }
+
+// --- the question in force, remembered per file ---
+// the generated code travels with it, so reopening a file re-applies the filter
+// from storage instead of asking the model the same thing again
+let restoredFilter = false;
+
+function saveFilter() {
+  if (!dataFile) return;
+  if (queryCode) lsSet(LS_FILTER + dataFile, {q: askQuestion, code: queryCode});
+  else lsDel(LS_FILTER + dataFile);
+}
+
+function loadFilter() {
+  const saved = dataFile ? lsGet(LS_FILTER + dataFile, null) : null;
+  askQuestion = saved?.q || '';
+  queryCode = saved?.code || '';
+  restoredFilter = !!queryCode;
+  $('askInput').value = askQuestion;
+}
 
 // --- remembered column selection, per file ---
 function saveColumnPrefs() {
@@ -591,6 +623,7 @@ async function runAsk(question) {
       flash(`Joined from your question: ${joinSpec.map(j => baseOf(j.file)).join(', ')}`, 'info');
     }
     rememberAsk(question);   // only questions that actually ran
+    saveFilter();
     renderPreview();
   } catch (e) {
     state.className = 'small mt-1 text-danger';
@@ -620,6 +653,8 @@ function adoptProjectedColumns(d) {
 function clearAsk() {
   queryCode = '';
   askQuestion = '';
+  restoredFilter = false;
+  saveFilter();
   $('askInput').value = '';
   $('askState').hidden = true;
   $('askClear').hidden = true;
@@ -947,6 +982,7 @@ $('joinReset').addEventListener('click', () => {
   if (queryCode) {
     queryCode = '';
     askQuestion = '';
+    saveFilter();
     $('askInput').value = '';
     $('askState').hidden = true;
     $('askClear').hidden = true;
