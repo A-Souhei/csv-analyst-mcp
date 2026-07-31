@@ -1025,7 +1025,12 @@ async def export_file(request: Request):
 
 @mcp.custom_route("/", methods=["GET"])
 async def ui(_: Request):
-    return HTMLResponse((TEMPLATES / "index.html").read_text())
+    # the page carries its own script, so a cached copy keeps running the old UI
+    # against a rebuilt server until someone thinks to hard-refresh
+    return HTMLResponse(
+        (TEMPLATES / "index.html").read_text(),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @mcp.custom_route("/reports/{name}", methods=["GET"])
