@@ -1,0 +1,6 @@
+record_id,location-region,location-district,location-facility,LOCATION_OF_EVENT_REGION,LOCATION_OF_EVENT_WARD,LOCATION_OF_EVENT_VILLAGE,cases
+R-001,Northern,Alpha,Alpha Clinic,Northern,Ward A,Village 1,3
+R-002,Northern,Beta,Beta Health Post,Northern,Ward B,Village 2,1
+R-003,Coastal,Gamma,Gamma Dispensary,Coastal,Ward C,Village 3,7
+R-004,Coastal,Delta,Delta Clinic,Coastal,Ward D,Village 4,0
+R-005,Central,Epsilon,Epsilon Hospital,Central,Ward E,Village 5,12

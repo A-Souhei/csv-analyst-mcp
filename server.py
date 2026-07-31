@@ -1343,19 +1343,28 @@ def _plan_join(question: str, base: Path, limit: int = 12) -> list[dict]:
     return valid
 
 
+def _column(frame: pd.DataFrame, name: str) -> pd.Series:
+    """The named column as a Series.
+
+    Generated code can repeat a name — df[['a', 'b', 'a']] — and then frame[name]
+    hands back a DataFrame, which has no .dtype. Position always gives a Series.
+    """
+    return frame.iloc[:, list(frame.columns).index(name)]
+
+
 def _display_rows(frame: pd.DataFrame, n_index_cols: int = 0) -> tuple[list[dict], list[list[str]]]:
     """Frame -> (column metadata, display strings) in the shape the viewer expects."""
     columns = [
         {
             "name": str(c),
-            "dtype": str(frame[c].dtype),
+            "dtype": str(s.dtype),
             "pii": False,
-            "kind": _column_kind(frame[c]),
+            "kind": _column_kind(s),
             "numeric": bool(
-                pd.api.types.is_numeric_dtype(frame[c]) and not pd.api.types.is_bool_dtype(frame[c])
+                pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s)
             ),
         }
-        for c in frame.columns
+        for c, s in ((c, frame.iloc[:, i]) for i, c in enumerate(frame.columns))
     ]
     rows = [[_fmt(v) for v in row] for row in frame.itertuples(index=False, name=None)]
     return columns, rows
@@ -1378,7 +1387,7 @@ def _paged_frame_response(
     if sort_col == ROW_SORT_KEY:
         order = frame.index.sort_values(ascending=not descending)
     elif sort_col in frame.columns:
-        order = _sort_key(frame[sort_col], _column_kind(frame[sort_col])).sort_values(
+        order = _sort_key(_column(frame, sort_col), _column_kind(_column(frame, sort_col))).sort_values(
             ascending=not descending, kind="stable", na_position="last"
         ).index
     else:
@@ -1455,7 +1464,7 @@ def _view_frame(p: Path, body: dict) -> tuple[pd.DataFrame, list[str], str]:
     sort_col = str(body.get("sort") or "")
     if sort_col and sort_col != ROW_SORT_KEY and sort_col in frame.columns:
         frame = frame.loc[
-            _sort_key(frame[sort_col], _column_kind(frame[sort_col])).sort_values(
+            _sort_key(_column(frame, sort_col), _column_kind(_column(frame, sort_col))).sort_values(
                 ascending=body.get("dir", "asc") != "desc", kind="stable", na_position="last"
             ).index
         ]
@@ -1654,7 +1663,7 @@ async def api_query(request: Request):
         if row_numbers is not None:
             row_numbers = [int(i) + 1 for i in order]
     elif sort_col in frame.columns:
-        order = _sort_key(frame[sort_col], _column_kind(frame[sort_col])).sort_values(
+        order = _sort_key(_column(frame, sort_col), _column_kind(_column(frame, sort_col))).sort_values(
             ascending=not descending, kind="stable", na_position="last"
         ).index
         frame = frame.loc[order]
@@ -1709,6 +1718,7 @@ async def api_pii(request: Request):
 if __name__ == "__main__":
     import uvicorn
     from starlette.middleware.cors import CORSMiddleware
+    from starlette.middleware.errors import ServerErrorMiddleware
     from mcp.server.transport_security import TransportSecuritySettings
 
     # served on localhost, LAN and tailnet hostnames — the SDK's default
@@ -1717,6 +1727,14 @@ if __name__ == "__main__":
         stateless_http=True,
         json_response=True,
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
+    # an unhandled error would otherwise come back as plain "Internal Server
+    # Error", which the webui reports as a JSON parse failure instead of a cause
+    app.add_middleware(
+        ServerErrorMiddleware,
+        handler=lambda request, exc: JSONResponse(
+            {"error": f"{type(exc).__name__}: {exc}"}, status_code=500
+        ),
     )
     # browser-based MCP clients (e.g. llama.cpp webui) need CORS on /mcp
     app.add_middleware(
