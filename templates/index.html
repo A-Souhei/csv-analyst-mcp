@@ -133,6 +133,8 @@
         <button class="btn btn-outline-secondary" id="exportCsv" type="button">Export CSV</button>
         <button class="btn btn-outline-secondary" id="exportXlsx" type="button">Excel</button>
       </div>
+      <button class="btn btn-sm btn-outline-secondary" id="copyTable" type="button"
+              title="Copy to the clipboard what this page shows — your question, the columns shown and up to 10 of the displayed rows"></button>
       <div class="ms-auto d-flex align-items-center gap-1">
         <button class="btn btn-sm btn-outline-secondary" id="dataFirst" type="button" title="First page">&laquo;</button>
         <button class="btn btn-sm btn-outline-secondary" id="dataPrev" type="button" title="Previous page (←)">&larr;</button>
@@ -262,7 +264,7 @@ let filesCache = [], detailFile = null, browseState = {path: null, parent: null}
 let fileFolder = '', fileQuery = '', filesPage = 1, filesPageSize = 25;
 let filesSort = {key: 'name', desc: false};
 let dataFile = null, dataPage = 1, dataPageSize = 50, dataCache = null;
-let colQuery = '', queryCode = '';
+let colQuery = '', queryCode = '', askQuestion = '';
 let colMode = 'all', chosenCols = new Set(), pickDraft = new Set();
 let joinSpec = [], joinDraft = [], baseColumns = {all: [], pii: new Set()};
 let dataSort = {col: '', dir: 'asc'};
@@ -304,7 +306,7 @@ function route() {
   if (h.startsWith('#/view=')) {
     const target = decodeURIComponent(h.slice(7));
     if (target !== dataFile) {
-      dataFile = target; dataPage = 1; colQuery = ''; queryCode = '';
+      dataFile = target; dataPage = 1; colQuery = ''; queryCode = ''; askQuestion = '';
       colMode = 'all'; chosenCols = new Set(); dataSort = {col: '', dir: 'asc'};
       colPrefsLoaded = false;
       loadAskHistory();
@@ -450,18 +452,22 @@ async function writeClipboard(text) {
   } catch (e) { return false; }
 }
 
-async function copyPath(path, btn) {
-  if (!await writeClipboard(path)) {
-    flash('Could not copy the path — select it from the file page instead.', 'danger');
-    return;
-  }
+function flashCopied(btn, label = '&check;') {
   const original = btn.innerHTML;
-  btn.innerHTML = '&check;';
+  btn.innerHTML = label;
   btn.classList.replace('btn-outline-secondary', 'btn-outline-success');
   setTimeout(() => {
     btn.innerHTML = original;
     btn.classList.replace('btn-outline-success', 'btn-outline-secondary');
   }, 1200);
+}
+
+async function copyPath(path, btn) {
+  if (!await writeClipboard(path)) {
+    flash('Could not copy the path — select it from the file page instead.', 'danger');
+    return;
+  }
+  flashCopied(btn);
 }
 
 $('filesBody').addEventListener('click', ev => {
@@ -561,6 +567,7 @@ async function runAsk(question) {
       {file: dataFile, question, joins: joinSpec, page: 1, page_size: dataPageSize,
        sort: dataSort.col, dir: dataSort.dir});
     queryCode = d.code;
+    askQuestion = question;
     dataCache = d;
     dataPage = 1;
     // a question that set up its own join hands the spec back — adopt it so the
@@ -584,6 +591,7 @@ async function runAsk(question) {
 
 function clearAsk() {
   queryCode = '';
+  askQuestion = '';
   $('askInput').value = '';
   $('askState').hidden = true;
   $('askClear').hidden = true;
@@ -722,14 +730,7 @@ function renderPreview() {
     $('askClear').hidden = false;
   }
 
-  const q = colQuery.trim().toLowerCase();
-  const cols = d.columns
-    .map((c, i) => ({...c, i}))
-    .filter(c =>
-      (colMode === 'all'
-        || (colMode === 'nopii' && !c.pii)
-        || (colMode === 'chosen' && chosenCols.has(c.name)))
-      && (!q || c.name.toLowerCase().includes(q)));
+  const cols = shownColumns();
   $('colInfo').textContent = cols.length === d.columns.length
     ? '' : `${cols.length} of ${d.columns.length} columns`;
   $('colAll').classList.toggle('active', colMode === 'all');
@@ -917,6 +918,7 @@ $('joinReset').addEventListener('click', () => {
   // survive without them, so drop the filter with the join
   if (queryCode) {
     queryCode = '';
+    askQuestion = '';
     $('askInput').value = '';
     $('askState').hidden = true;
     $('askClear').hidden = true;
@@ -926,18 +928,20 @@ $('joinReset').addEventListener('click', () => {
 });
 
 // --- export the current view ---
-// the columns the table is showing, in its order — so an export matches the screen
-const shownColumnNames = () => {
+// the columns the table is showing, in its order, each carrying its index into
+// a row — so a copy or an export matches the screen
+function shownColumns() {
   const d = dataCache;
   if (!d) return [];
   const q = colQuery.trim().toLowerCase();
   return d.columns
+    .map((c, i) => ({...c, i}))
     .filter(c => (colMode === 'all'
         || (colMode === 'nopii' && !c.pii)
         || (colMode === 'chosen' && chosenCols.has(c.name)))
-      && (!q || c.name.toLowerCase().includes(q)))
-    .map(c => c.name);
-};
+      && (!q || c.name.toLowerCase().includes(q)));
+}
+const shownColumnNames = () => shownColumns().map(c => c.name);
 
 async function exportView(format) {
   const buttons = [$('exportCsv'), $('exportXlsx')];
@@ -980,6 +984,50 @@ async function exportView(format) {
 
 $('exportCsv').addEventListener('click', () => exportView('csv'));
 $('exportXlsx').addEventListener('click', () => exportView('xlsx'));
+
+// --- copy the current view ---
+// a paste-ready snippet of what is on screen, not of the file: the question that
+// produced these rows, the columns shown, and a handful of rows. PII cells are
+// already masked in dataCache, so a copy can never carry values the table hides.
+const COPY_ROWS_MAX = 10;
+
+function viewAsMarkdown() {
+  const d = dataCache;
+  const cols = shownColumns();
+  if (!d || !cols.length || !d.rows.length) return '';
+  const rows = d.rows.slice(0, COPY_ROWS_MAX);
+  const cell = v => String(v).replace(/\|/g, '\\|').replace(/\s*\n\s*/g, ' ');
+  const head = [
+    `File: ${baseOf(d.file)}`,
+    (d.joins || []).length ? `Joined with: ${d.joins.map(j => j.name).join(', ')}` : '',
+    `Question: ${askQuestion || '(none — the file as it is)'}`,
+    d.code ? `Filter: ${d.code}` : '',
+    `Columns shown: ${cols.map(c => c.name).join(', ')}`,
+    `Rows: ${rows.length} of the ${d.rows.length} on screen`
+      + ` (page ${d.page} of ${d.n_pages}, ${d.n_rows.toLocaleString()} in the view)`,
+    d.redacted_columns.length ? `Masked as PII: ${d.redacted_columns.join(', ')}` : '',
+  ].filter(Boolean);
+  const body = [
+    '| # | ' + cols.map(c => cell(c.name)).join(' | ') + ' |',
+    '| --- | ' + cols.map(() => '---').join(' | ') + ' |',
+    ...rows.map((row, ri) =>
+      `| ${d.row_numbers ? d.row_numbers[ri] : d.start + ri + 1} | `
+      + cols.map(c => cell(row[c.i])).join(' | ') + ' |'),
+  ];
+  return head.concat('', body).join('\n');
+}
+
+$('copyTable').innerHTML = COPY_ICON + ' Copy table';
+$('copyTable').addEventListener('click', async ev => {
+  const btn = ev.currentTarget;
+  const text = viewAsMarkdown();
+  if (!text) { flash('Nothing to copy — this view has no rows or no columns.', 'warning'); return; }
+  if (!await writeClipboard(text)) {
+    flash('Could not copy the table — the browser refused clipboard access.', 'danger');
+    return;
+  }
+  flashCopied(btn, '&check; Copied');
+});
 
 const goPage = n => { dataPage = n; loadPreview(); };
 $('dataFirst').addEventListener('click', () => goPage(1));
