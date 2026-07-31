@@ -266,13 +266,21 @@ let filesSort = {key: 'name', desc: false};
 let dataFile = null, dataPage = 1, dataPageSize = 50, dataCache = null;
 let colQuery = '', queryCode = '', askQuestion = '';
 let colMode = 'all', chosenCols = new Set(), pickDraft = new Set();
+let viewColumns = [];   // every column the unfiltered view holds — a question may show fewer
+// what the picker can offer: the whole view, even while a question narrows the table
+const pickerColumns = () => viewColumns.length ? viewColumns : (dataCache?.columns || []);
 let joinSpec = [], joinDraft = [], baseColumns = {all: [], pii: new Set()};
 let dataSort = {col: '', dir: 'asc'};
 let colPrefsLoaded = false;
 
 const api = async (url, opts) => {
   const r = await fetch(url, opts);
-  const d = await r.json();
+  const body = await r.text();
+  let d;
+  // a reply that isn't JSON is a failure the server never framed — report the
+  // status, not the parser's complaint about the first character
+  try { d = JSON.parse(body); }
+  catch (e) { throw new Error(`${r.status} ${r.statusText}: ${body.slice(0, 200)}`); }
   if (!r.ok) throw new Error(d.error || r.status);
   return d;
 };
@@ -307,7 +315,8 @@ function route() {
     const target = decodeURIComponent(h.slice(7));
     if (target !== dataFile) {
       dataFile = target; dataPage = 1; colQuery = ''; queryCode = ''; askQuestion = '';
-      colMode = 'all'; chosenCols = new Set(); dataSort = {col: '', dir: 'asc'};
+      colMode = 'all'; chosenCols = new Set(); viewColumns = [];
+      dataSort = {col: '', dir: 'asc'};
       colPrefsLoaded = false;
       loadAskHistory();
       loadJoins();
@@ -520,6 +529,8 @@ async function loadPreview() {
             + `&page=${dataPage}&page_size=${dataPageSize}${sortQS}`);
     dataCache = d;
     dataPage = d.page;
+    // no filter in play, so this is the full set the picker can offer
+    if (!d.code) viewColumns = d.columns;
     if (!colPrefsLoaded) { restoreColumnPrefs(d); colPrefsLoaded = true; }
     renderPreview();
   } catch (e) {
@@ -570,6 +581,7 @@ async function runAsk(question) {
     askQuestion = question;
     dataCache = d;
     dataPage = 1;
+    adoptProjectedColumns(d);
     // a question that set up its own join hands the spec back — adopt it so the
     // Join panel, its storage and this question's history entry all agree
     if (d.joins_planned && (d.joins || []).length) {
@@ -587,6 +599,22 @@ async function runAsk(question) {
     $('askRun').disabled = $('askInput').disabled = false;
     $('dataScroll').style.opacity = '1';
   }
+}
+
+// "show only these columns" comes back as a narrower frame, which the picker
+// would otherwise know nothing about: adopt it as the chosen set so the button
+// says so and the choice outlives the filter.
+// row_numbers means the rows still line up with the file — a projection. Grouped
+// output has none, and its columns are results, not a pick of the file's.
+function adoptProjectedColumns(d) {
+  const names = d.columns.map(c => c.name);
+  const all = viewColumns.map(c => c.name);
+  if (!d.row_numbers || !all.length) return;
+  if (names.length >= all.length || !names.every(n => all.includes(n))) return;
+  chosenCols = new Set(names);
+  colMode = 'chosen';
+  saveColumnPrefs();
+  flash(`Your question picked ${names.length} column(s) — kept as your chosen columns.`, 'info');
 }
 
 function clearAsk() {
@@ -1044,10 +1072,10 @@ $('colHidePii').addEventListener('click', () => { colMode = 'nopii'; saveColumnP
 
 // --- column picker ---
 function renderColPicker() {
-  const d = dataCache;
-  if (!d) return;
+  if (!dataCache) return;
+  const all = pickerColumns();
   const q = $('colModalSearch').value.trim().toLowerCase();
-  const shown = d.columns.filter(c => !q || c.name.toLowerCase().includes(q));
+  const shown = all.filter(c => !q || c.name.toLowerCase().includes(q));
   $('colPickList').innerHTML = shown.map(c => `
     <div class="col">
       <label class="d-flex align-items-center gap-2 border rounded px-2 py-1 mb-0">
@@ -1059,7 +1087,7 @@ function renderColPicker() {
       </label>
     </div>`).join('') || '<div class="text-secondary p-2">No column matches that search.</div>';
   $('colPickCount').textContent =
-    `${pickDraft.size} of ${d.columns.length} selected` +
+    `${pickDraft.size} of ${all.length} selected` +
     (q ? ` · ${shown.length} shown` : '');
 }
 
@@ -1072,7 +1100,7 @@ $('colModal').addEventListener('show.bs.modal', () => {
   if (!dataCache) return;
   pickDraft = new Set(colMode === 'chosen' && chosenCols.size
     ? chosenCols
-    : dataCache.columns.filter(c => colMode !== 'nopii' || !c.pii).map(c => c.name));
+    : pickerColumns().filter(c => colMode !== 'nopii' || !c.pii).map(c => c.name));
   $('colModalSearch').value = '';
   renderColPicker();
 });
@@ -1082,7 +1110,7 @@ $('colPickList').addEventListener('change', ev => {
   const box = ev.target.closest('input[data-col]');
   if (!box) return;
   box.checked ? pickDraft.add(box.dataset.col) : pickDraft.delete(box.dataset.col);
-  $('colPickCount').textContent = `${pickDraft.size} of ${dataCache.columns.length} selected`;
+  $('colPickCount').textContent = `${pickDraft.size} of ${pickerColumns().length} selected`;
 });
 $('colPickAll').addEventListener('click', () => {
   pickVisible().forEach(n => pickDraft.add(n));
@@ -1093,7 +1121,7 @@ $('colPickNone').addEventListener('click', () => {
   renderColPicker();
 });
 $('colPickNonPii').addEventListener('click', () => {
-  const pii = new Set(dataCache.columns.filter(c => c.pii).map(c => c.name));
+  const pii = new Set(pickerColumns().filter(c => c.pii).map(c => c.name));
   pickVisible().forEach(n => pii.has(n) ? pickDraft.delete(n) : pickDraft.add(n));
   renderColPicker();
 });
@@ -1103,7 +1131,12 @@ $('colApply').addEventListener('click', () => {
     flash('No column selected — showing all of them.', 'warning');
   } else {
     chosenCols = new Set(pickDraft);
-    colMode = chosenCols.size === dataCache.columns.length ? 'all' : 'chosen';
+    colMode = chosenCols.size === pickerColumns().length ? 'all' : 'chosen';
+    // a filtered result can be narrower than the view, so say where a pick went
+    const here = new Set(dataCache.columns.map(c => c.name));
+    const missing = [...chosenCols].filter(n => !here.has(n)).length;
+    if (missing) flash(`${missing} chosen column(s) aren't in this filtered result — `
+      + 'clear the filter to see them.', 'info');
   }
   saveColumnPrefs();
   renderPreview();
