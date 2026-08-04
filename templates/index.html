@@ -1240,9 +1240,9 @@ async function loadSources() {
       </span>
     </li>`).join('') || '<li class="list-group-item text-secondary">None — add entries to CSV_SOURCES in .env and re-run start.sh.</li>';
   $('sourcesList').innerHTML = d.sources.map(s => `
-    <li class="list-group-item d-flex justify-content-between align-items-center">
-      <code class="small">${s}</code>
-      <button class="btn btn-sm btn-outline-danger" onclick="removeSource('${s}')">Remove</button>
+    <li class="list-group-item d-flex justify-content-between align-items-center gap-2">
+      <code class="small text-break" style="min-width:0">${esc(s)}</code>
+      <button class="btn btn-sm btn-outline-danger flex-shrink-0" onclick="removeSource('${esc(s)}')">Remove</button>
     </li>`).join('') || '<li class="list-group-item text-secondary">None — only the data directory is readable.</li>';
   if (browseState.path === null) browseRoots(); else browse(browseState.path);
 }
