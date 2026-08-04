@@ -1007,6 +1007,44 @@ def llm_stop() -> dict:
     }
 
 
+def _saved_reports() -> list[Path]:
+    """The reports run_eda and visualize write — flat .html files, newest first."""
+    if not REPORTS_DIR.is_dir():
+        return []
+    return sorted(
+        (f for f in REPORTS_DIR.glob("*.html") if f.is_file()),
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def _clear_reports(dry_run: bool = False) -> dict:
+    deleted, freed = [], 0
+    for f in _saved_reports():
+        try:
+            size = f.stat().st_size
+            if not dry_run:
+                f.unlink()
+        except OSError:      # vanished under us, or not ours to remove
+            continue
+        deleted.append(f.name)
+        freed += size
+    return {"deleted": deleted, "n_deleted": len(deleted), "bytes_freed": freed, "dry_run": dry_run}
+
+
+@mcp.tool()
+def clear_reports(dry_run: bool = False) -> dict:
+    """Delete every saved HTML report.
+
+    Reports accumulate unprompted — run_eda and visualize each write one per call, and
+    every one embeds the rows it displayed, so the directory holds real data long after
+    the question was answered. Only .html files sitting directly in the reports directory
+    go; subdirectories and anything else are left alone. Pass dry_run to see what would
+    be removed without removing it. Report URLs handed out earlier 404 afterwards.
+    """
+    return _clear_reports(dry_run)
+
+
 # --- webui ---
 
 @mcp.custom_route("/exports/{name}", methods=["GET"])
@@ -1039,6 +1077,21 @@ async def report(request: Request):
     if f.suffix != ".html" or not f.is_file():
         return HTMLResponse("<h1>404 — no such report</h1>", status_code=404)
     return HTMLResponse(f.read_text())
+
+
+@mcp.custom_route("/api/reports", methods=["GET"])
+async def api_reports(_: Request):
+    files = _saved_reports()
+    total = 0
+    for f in files:
+        with contextlib.suppress(OSError):
+            total += f.stat().st_size
+    return JSONResponse({"n": len(files), "bytes": total})
+
+
+@mcp.custom_route("/api/reports/clear", methods=["POST"])
+async def api_reports_clear(_: Request):
+    return JSONResponse(_clear_reports())
 
 
 @mcp.custom_route("/api/files", methods=["GET"])

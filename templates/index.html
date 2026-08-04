@@ -253,6 +253,16 @@ A 🛡 column can be a join key: it matches on the real values and
           </div>
           <ul class="list-group list-group-flush" id="browseList" style="max-height:22rem;overflow:auto"></ul>
         </div>
+        <h5 class="mt-4">Saved reports</h5>
+        <p class="text-secondary small">Every EDA and visualisation writes an HTML report here,
+          with the rows it displayed embedded in it.</p>
+        <div class="card">
+          <div class="card-body d-flex justify-content-between align-items-center gap-2 py-2">
+            <span class="small" id="reportsSummary">&hellip;</span>
+            <button class="btn btn-sm btn-outline-danger flex-shrink-0" id="clearReportsBtn"
+                    onclick="clearReports()">Clear reports</button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1244,6 +1254,7 @@ async function loadSources() {
       <code class="small text-break" style="min-width:0">${esc(s)}</code>
       <button class="btn btn-sm btn-outline-danger flex-shrink-0" onclick="removeSource('${esc(s)}')">Remove</button>
     </li>`).join('') || '<li class="list-group-item text-secondary">None — only the data directory is readable.</li>';
+  loadReports();
   if (browseState.path === null) browseRoots(); else browse(browseState.path);
 }
 async function browseRoots() {
@@ -1283,6 +1294,43 @@ async function addSource(path) {
 async function removeSource(path) {
   await post('/api/sources', {path, remove: true});
   loadSources();
+}
+const fmtBytes = n => n < 1024 ? `${n} B`
+  : n < 1048576 ? `${(n / 1024).toFixed(0)} kB` : `${(n / 1048576).toFixed(1)} MB`;
+let clearArmed = null;   // timer handle while the button waits for its second click
+function disarmClear() {
+  clearTimeout(clearArmed);
+  clearArmed = null;
+  const btn = $('clearReportsBtn');
+  btn.textContent = 'Clear reports';
+  btn.className = 'btn btn-sm btn-outline-danger flex-shrink-0';
+}
+async function loadReports() {
+  disarmClear();
+  try {
+    const d = await api('/api/reports');
+    $('reportsSummary').textContent = d.n
+      ? `${d.n} report${d.n === 1 ? '' : 's'} · ${fmtBytes(d.bytes)}`
+      : 'None saved.';
+    $('clearReportsBtn').disabled = !d.n;
+  } catch (e) { $('reportsSummary').textContent = e.message; }
+}
+// the deletion can't be undone, so the button arms on the first click and acts on the
+// second — a modal dialog here would block the page for anything driving it
+async function clearReports() {
+  if (!clearArmed) {
+    const btn = $('clearReportsBtn');
+    btn.textContent = 'Confirm — delete all';
+    btn.className = 'btn btn-sm btn-danger flex-shrink-0';
+    clearArmed = setTimeout(disarmClear, 5000);
+    return;
+  }
+  disarmClear();
+  try {
+    const d = await post('/api/reports/clear', {});
+    flash(`Cleared ${d.n_deleted} report${d.n_deleted === 1 ? '' : 's'} — ${fmtBytes(d.bytes_freed)} freed.`);
+  } catch (e) { flash(e.message, 'danger'); }
+  loadReports();
 }
 
 route();
