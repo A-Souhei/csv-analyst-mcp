@@ -1,7 +1,11 @@
 .env
 docker-compose.override.yml
-data/config.json
 __pycache__/
-data/reports/
-data/exports/
 .claude/
+
+# data/ is a live working directory holding real analysed files — ignore all of
+# it and name the demo fixtures back in, so a dataset dropped here is never a
+# commit away from the remote regardless of its extension.
+data/*
+!data/demo_*.csv
+!data/sample.csv
