@@ -105,12 +105,18 @@ it `llm_status` still reports what is loaded, just with `gpus: null`.
 ```sh
 cp .env.example .env      # then edit it
 ./start.sh                # generates docker-compose.override.yml from .env, builds, starts
+./update-volumes.sh       # re-points the mounts only — no rebuild
 ```
 
 `start.sh` exists because compose cannot expand a variable-length volume list from one
 env var: it turns each `CSV_SOURCES` entry into a read-only `/mnt/<name>` mount. Mounts are
 browsable in the UI; a file appears in the Files list once you register it (a whole mount
-is one click under Sources).
+is one click under Sources). Both scripts share that generation logic via `volumes.sh`.
+
+Reach for `update-volumes.sh` after editing `CSV_SOURCES`, or when a mounted host dir was
+replaced rather than edited in place (re-clone, atomic `mv`) — a bind mount pins the source
+inode at container start, so a swapped-out dir keeps serving the old contents until the
+container is recreated. Edits *inside* a mounted dir need neither script; bind mounts are live.
 
 ### Environment
 
