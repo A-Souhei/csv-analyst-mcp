@@ -615,6 +615,7 @@ async function runAsk(question) {
   state.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>asking the local model…`;
   $('askRun').disabled = $('askInput').disabled = true;
   $('dataScroll').style.opacity = '.45';
+  let failed = false;
   try {
     const d = await post('/api/query',
       {file: dataFile, question, joins: joinSpec, page: 1, page_size: dataPageSize,
@@ -636,13 +637,25 @@ async function runAsk(question) {
     saveFilter();
     renderPreview();
   } catch (e) {
+    failed = true;
     state.className = 'small mt-1 text-danger';
-    state.textContent = e.message;
+    // the rows on screen still answer the PREVIOUS question — say so and leave
+    // them dimmed, or a failed question gets read off stale numbers
+    state.textContent = dataCache
+      ? `${e.message} — the table below still shows the previous result`
+      : e.message;
   } finally {
     $('askRun').disabled = $('askInput').disabled = false;
-    $('dataScroll').style.opacity = '1';
+    $('dataScroll').style.opacity = failed ? '.45' : '1';
   }
 }
+
+// A chosen set names the file's own columns. An aggregated result (no row_numbers)
+// has computed ones — group keys and an aggregate — so the pick can never match and
+// would render the answer as an empty table. Fall back to showing what it holds,
+// without touching the saved choice: it applies again the moment rows line up.
+const effectiveColMode = () =>
+  (colMode === 'chosen' && dataCache && !dataCache.row_numbers) ? 'all' : colMode;
 
 // "show only these columns" comes back as a narrower frame, which the picker
 // would otherwise know nothing about: adopt it as the chosen set so the button
@@ -806,10 +819,11 @@ function renderPreview() {
   const cols = shownColumns();
   $('colInfo').textContent = cols.length === d.columns.length
     ? '' : `${cols.length} of ${d.columns.length} columns`;
-  $('colAll').classList.toggle('active', colMode === 'all');
-  $('colHidePii').classList.toggle('active', colMode === 'nopii');
-  $('colChoose').classList.toggle('active', colMode === 'chosen');
-  $('colChoose').textContent = colMode === 'chosen'
+  const mode = effectiveColMode();
+  $('colAll').classList.toggle('active', mode === 'all');
+  $('colHidePii').classList.toggle('active', mode === 'nopii');
+  $('colChoose').classList.toggle('active', mode === 'chosen');
+  $('colChoose').textContent = mode === 'chosen'
     ? `Chosen (${chosenCols.size})` : 'Choose…';
 
   if (!cols.length) {
@@ -1008,11 +1022,12 @@ function shownColumns() {
   const d = dataCache;
   if (!d) return [];
   const q = colQuery.trim().toLowerCase();
+  const mode = effectiveColMode();
   return d.columns
     .map((c, i) => ({...c, i}))
-    .filter(c => (colMode === 'all'
-        || (colMode === 'nopii' && !c.pii)
-        || (colMode === 'chosen' && chosenCols.has(c.name)))
+    .filter(c => (mode === 'all'
+        || (mode === 'nopii' && !c.pii)
+        || (mode === 'chosen' && chosenCols.has(c.name)))
       && (!q || c.name.toLowerCase().includes(q)));
 }
 const shownColumnNames = () => shownColumns().map(c => c.name);

@@ -1286,14 +1286,31 @@ FILTER_PROMPT = (
     "- Reply with code only: no explanation, no markdown fences, no imports.\n"
     "- Usually one line. If you need a couple of steps, the LAST line must be the "
     "expression to show.\n"
-    "- The last expression must be a DataFrame or Series, never a plain number.\n"
+    "- A count or total the question asks for is the answer: end on the number "
+    "itself, not the rows behind it. Count with df[<mask>].shape[0] — wrapping the "
+    "frame in len() invites a bracket mismatch on a long condition.\n"
+    "- The question may be written as SQL. Translate EVERY clause it contains — a "
+    "long WHERE list never excuses dropping a short GROUP BY that follows it.\n"
+    "- \"group by\", \"per\", \"for each\" and \"broken down by\" all mean the result "
+    "is one row per group, never the matching rows:\n"
+    "    select count(*) group by c where <cond>  ->  df[<mask>]['c'].value_counts()\n"
     "- Do not use .query(), .eval(), file I/O, or any import.\n"
     "- Filtering: boolean masks like df[(df['a'] > 5) & (df['b'] == 'x')] — wrap each "
     "condition in parentheses.\n"
     "- Text matching: .str.contains('x', case=False, na=False).\n"
     "- Only some columns: df.loc[<mask>, ['A', 'B']].\n"
-    "- Grouping with a condition on the aggregate (SQL HAVING) takes two lines, "
-    "because .query() is not allowed:\n"
+    "- A condition on a column of the data filters rows and belongs BEFORE the "
+    "groupby, even when the question writes it as HAVING: HAVING is only for a "
+    "condition on the aggregate itself. Never push a row condition inside the "
+    "groups with .apply() — df[<mask>].groupby('c').size() is the whole answer.\n"
+    "- Return the frame, Series or number itself: never .to_dict(), .to_list() or "
+    "any other conversion.\n"
+    "- \"with more than N\", \"at least N\", \"fewer than N\" applied to a group is a "
+    "condition on the count (SQL HAVING), and it must be kept — \"regions with more "
+    "than 20 wards\" is not answered by counting wards per region alone.\n"
+    "- HAVING takes two lines, because .query() is not allowed. The condition reads "
+    "the grouped result, so it must name that variable — never df, which has no "
+    "aggregate column:\n"
     "    g = df.groupby('col').agg(n=('a', 'size'), total=('b', 'sum')).reset_index()\n"
     "    g[g['n'] > 20]\n"
     "- NA / empty / missing / blank means a null value — use .isna() or .notna(). "
@@ -1349,6 +1366,9 @@ def _sort_key(col: pd.Series, kind: str) -> pd.Series:
 
 
 JOIN_INTENT = re.compile(r"\b(join|joined|merge|combine|enrich|lookup|look up|together with)\b", re.I)
+
+GROUP_INTENT = re.compile(r"\b(group by|grouped by|per|for each|broken down by)\b", re.I)
+AGGREGATED = re.compile(r"\b(groupby|value_counts|crosstab|pivot_table|resample|agg)\b")
 
 JOIN_PLAN_PROMPT = (
     "Decide which files to join to answer a question about a base table.\n"
@@ -1664,33 +1684,76 @@ async def api_query(request: Request):
             "Do not merge and do not read any file — just use df.\n"
             if joined_applied else ""
         )
-        try:
-            content, reasoning, finish = _llm_chat(
-                f"{FILTER_PROMPT}{already}\nColumns:\n{cols}\n\nQuestion: {question}"
-            )
-        except httpx.HTTPError as e:
-            return JSONResponse({"error": f"local LLM unreachable: {e}"}, status_code=502)
+        base = f"{FILTER_PROMPT}{already}\nColumns:\n{cols}\n\nQuestion: {question}"
 
-        # a reasoning model can spend the whole budget thinking and answer with
-        # nothing — the expression is usually in the reasoning, so look there too
-        code = _extract_code(content) or _extract_code(reasoning)
-        if not code:
-            detail = (
+        def ask(extra: str = "") -> tuple[str, str]:
+            """(code, error) for one round trip — error is '' when code came back."""
+            content, reasoning, finish = _llm_chat(base + extra)
+            # a reasoning model can spend the whole budget thinking and answer with
+            # nothing — the expression is usually in the reasoning, so look there too
+            written = _extract_code(content) or _extract_code(reasoning)
+            if written:
+                return written, ""
+            return "", (
                 "the model ran out of tokens while reasoning and never wrote the code"
                 if finish == "length" else
                 f"the model replied: {(content or reasoning or '(nothing)')[:200]}"
             )
-            return JSONResponse(
-                {"error": f"could not read pandas out of the model reply — {detail}"},
-                status_code=422,
-            )
 
-    try:
-        _, result, redacted = _exec_eda(
-            p, code, None, True, frame=joined_frame, frame_redacted=joined_pii
-        )
-    except Exception as e:
-        return JSONResponse({"error": f"{type(e).__name__}: {e}", "code": code}, status_code=422)
+        try:
+            code, why = ask()
+            if not code:
+                return JSONResponse(
+                    {"error": f"could not read pandas out of the model reply — {why}"},
+                    status_code=422,
+                )
+
+            # a long WHERE list crowds out a short GROUP BY: the model returns the
+            # matching rows and the grouping is silently lost. Nothing raises, so
+            # the generated code is the only signal that the answer is wrong.
+            if GROUP_INTENT.search(question) and not AGGREGATED.search(code):
+                regrouped, _ = ask(
+                    "\n\nYour previous answer returned the matching rows:\n"
+                    f"{code}\n"
+                    "The question asks for one row per group. Rewrite it to aggregate "
+                    "with groupby or value_counts, keeping any filter it already has."
+                )
+                # a question can read as grouping and still want rows — only take
+                # the retry when it actually aggregates
+                if regrouped and AGGREGATED.search(regrouped):
+                    code = regrouped
+        except httpx.HTTPError as e:
+            return JSONResponse({"error": f"local LLM unreachable: {e}"}, status_code=502)
+    else:
+        ask = None  # code came from the client: run it as given, never rewrite it
+
+    # the model reliably gets two things wrong on the first attempt — column names
+    # left unquoted, and a HAVING condition written against df instead of the
+    # grouped result — and both raise. Handing the error back fixes them.
+    for final in (False, True):
+        try:
+            _, result, redacted = _exec_eda(
+                p, code, None, True, frame=joined_frame, frame_redacted=joined_pii
+            )
+            break
+        except Exception as e:
+            failed, err = code, f"{type(e).__name__}: {e}"
+            if ask is None or final:
+                return JSONResponse({"error": err, "code": failed}, status_code=422)
+            try:
+                repaired, _ = ask(
+                    f"\n\nYour previous answer raised {err}:\n{failed}\n"
+                    "Rewrite it so it runs, still answering the whole question — "
+                    "dropping a filter or a condition to make the error go away is "
+                    "not a fix. Every column name must be quoted as a string, and a "
+                    "condition on an aggregate must be applied to the grouped "
+                    "result, never to df."
+                )
+            except httpx.HTTPError:
+                return JSONResponse({"error": err, "code": failed}, status_code=422)
+            if not repaired:
+                return JSONResponse({"error": err, "code": failed}, status_code=422)
+            code = repaired
     if result is None:
         return JSONResponse({"error": "that code returned nothing to show", "code": code}, status_code=422)
 
